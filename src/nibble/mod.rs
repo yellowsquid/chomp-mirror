@@ -313,11 +313,11 @@ impl From<LiteralError> for TermError {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Seq {
+pub struct Cat {
     terms: Vec<Term>,
 }
 
-impl Parse for Seq {
+impl Parse for Cat {
     type Err = SeqError;
 
     fn parse<I: Peek<Item = char>>(mut iter: I) -> Result<Self, ParseError<Self::Err>> {
@@ -335,11 +335,11 @@ impl Parse for Seq {
     }
 }
 
-impl FromStr for Seq {
-    type Err = ParseError<<Seq as Parse>::Err>;
+impl FromStr for Cat {
+    type Err = ParseError<<Cat as Parse>::Err>;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Seq::parse(s.chars().peekable())
+        Cat::parse(s.chars().peekable())
     }
 }
 
@@ -354,7 +354,7 @@ impl From<TermError> for SeqError {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Alt {
-    seqs: Vec<Seq>,
+    seqs: Vec<Cat>,
 }
 
 impl Parse for Alt {
@@ -362,11 +362,11 @@ impl Parse for Alt {
 
     fn parse<I: Peek<Item = char>>(mut iter: I) -> Result<Self, ParseError<Self::Err>> {
         let mut seqs = Vec::new();
-        seqs.push(Seq::parse(&mut iter).map_err(ParseError::map)?);
+        seqs.push(Cat::parse(&mut iter).map_err(ParseError::map)?);
 
         while iter.consume_if_next(&'|') {
             iter.advance_while(|c| c.is_whitespace());
-            seqs.push(Seq::parse(&mut iter).map_err(ParseError::map)?);
+            seqs.push(Cat::parse(&mut iter).map_err(ParseError::map)?);
         }
 
         Ok(Self { seqs })
@@ -427,7 +427,7 @@ mod tests {
     use super::Alt;
     use super::Expression;
     use super::Fix;
-    use super::Seq;
+    use super::Cat;
     use super::Term;
     use super::{
         parse::{Parse, ParseError},
@@ -641,7 +641,7 @@ mod tests {
     fn parse_fix_basic() {
         let expr = Expression {
             alt: Alt {
-                seqs: vec![Seq {
+                seqs: vec![Cat {
                     terms: vec![Term::Epsilon],
                 }],
             },
@@ -707,7 +707,7 @@ mod tests {
                 },
                 expr: Expression {
                     alt: Alt {
-                        seqs: vec![Seq {
+                        seqs: vec![Cat {
                             terms: vec![Term::Epsilon],
                         }],
                     },
