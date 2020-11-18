@@ -24,3 +24,4 @@
 #![warn(variant_size_differences)]
 
 pub mod nibble;
+pub mod ast;

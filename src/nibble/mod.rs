@@ -1,5 +1,10 @@
 pub mod parse;
 
+use crate::ast::{
+    self,
+    convert::{Context, Convert},
+};
+
 use self::parse::{
     iter::{Peek, PeekExt, PeekableTakeWhile},
     requires, Parse, ParseError,
@@ -35,6 +40,18 @@ impl FromStr for Ident {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ident::parse(s.chars().peekable())
+    }
+}
+
+impl Convert for Ident {
+    fn convert(self, context: &Context) -> ast::Term {
+        use ast::Term;
+
+        if let Some(variable) = context.get(&self.name) {
+            Term::Variable(variable)
+        } else {
+            Term::Call(self.name, vec![])
+        }
     }
 }
 
@@ -133,6 +150,12 @@ impl Parse for Literal {
     }
 }
 
+impl Convert for Literal {
+    fn convert(self, _context: &Context) -> ast::Term {
+        ast::Term::Literal(self.contents)
+    }
+}
+
 impl FromStr for Literal {
     type Err = ParseError<<Literal as Parse>::Err>;
 
@@ -151,6 +174,16 @@ pub enum LiteralError {
 pub struct Call {
     name: Ident,
     args: Vec<Expression>,
+}
+
+impl Convert for Call {
+    fn convert(self, context: &Context) -> ast::Term {
+        use ast::Term;
+        Term::Call(
+            self.name.name,
+            self.args.into_iter().map(|e| e.convert(context)).collect(),
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -183,6 +216,14 @@ impl FromStr for Fix {
     }
 }
 
+impl Convert for Fix {
+    fn convert(self, context: &Context) -> ast::Term {
+        use ast::Term;
+        let expr = self.expr;
+        Term::Fix(Box::new(context.push(self.arg.name, |c| expr.convert(c))))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FixError(Box<ExpressionError>);
 
@@ -203,7 +244,7 @@ pub enum Term {
     Epsilon,
     Ident(Ident),
     Literal(Literal),
-    Call { name: Ident, args: Vec<Expression> },
+    Call(Call),
     Fix(Fix),
     Parens(Expression),
 }
@@ -242,7 +283,7 @@ impl Parse for Term {
                         );
 
                         if iter.consume_if_next(&')') {
-                            return Ok(Self::Call { name: ident, args });
+                            return Ok(Self::Call(Call { name: ident, args }));
                         }
 
                         requires(&mut iter, ',')?;
@@ -262,6 +303,20 @@ impl FromStr for Term {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Term::parse(s.chars().peekable())
+    }
+}
+
+impl Convert for Term {
+    fn convert(self, context: &Context) -> ast::Term {
+        use ast::Term;
+        match self {
+            Self::Epsilon => Term::Epsilon,
+            Self::Ident(i) => i.convert(context),
+            Self::Literal(l) => l.convert(context),
+            Self::Call(c) => c.convert(context),
+            Self::Fix(f) => f.convert(context),
+            Self::Parens(e) => e.convert(context),
+        }
     }
 }
 
@@ -343,6 +398,15 @@ impl FromStr for Cat {
     }
 }
 
+impl Convert for Cat {
+    fn convert(self, context: &Context) -> ast::Term {
+        use ast::Term;
+        self.terms.into_iter().rfold(Term::Epsilon, |exp, term| {
+            Term::Cat(Box::new(term.convert(context)), Box::new(exp))
+        })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SeqError(TermError);
 
@@ -354,7 +418,7 @@ impl From<TermError> for SeqError {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Alt {
-    seqs: Vec<Cat>,
+    cats: Vec<Cat>,
 }
 
 impl Parse for Alt {
@@ -369,7 +433,7 @@ impl Parse for Alt {
             seqs.push(Cat::parse(&mut iter).map_err(ParseError::map)?);
         }
 
-        Ok(Self { seqs })
+        Ok(Self { cats: seqs })
     }
 }
 
@@ -378,6 +442,15 @@ impl FromStr for Alt {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Alt::parse(s.chars().peekable())
+    }
+}
+
+impl Convert for Alt {
+    fn convert(self, context: &Context) -> ast::Term {
+        use ast::Term;
+        self.cats.into_iter().rfold(Term::Bottom, |exp, cat| {
+            Term::Alt(Box::new(cat.convert(context)), Box::new(exp))
+        })
     }
 }
 
@@ -413,6 +486,12 @@ impl FromStr for Expression {
     }
 }
 
+impl Convert for Expression {
+    fn convert(self, context: &Context) -> ast::Term {
+        self.alt.convert(context)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExpressionError(AltError);
 
@@ -424,14 +503,13 @@ impl From<AltError> for ExpressionError {
 
 #[cfg(test)]
 mod tests {
-    use super::Alt;
-    use super::Expression;
-    use super::Fix;
-    use super::Cat;
-    use super::Term;
     use super::{
         parse::{Parse, ParseError},
-        Ident, Literal, LiteralError,
+        Alt, Cat, Expression, Fix, Ident, Literal, LiteralError, Term,
+    };
+    use crate::ast::{
+        self,
+        convert::{Context, Convert},
     };
     use std::iter;
 
@@ -481,6 +559,79 @@ mod tests {
             "123".parse::<Ident>(),
             Err(ParseError::InvalidCharacter('1'))
         );
+    }
+
+    #[test]
+    fn convert_ident_variable() {
+        use ast::Term;
+        let context = Context::new();
+        context.push("x".to_owned(), |c| {
+            assert_eq!(
+                Ident {
+                    name: "x".to_owned()
+                }
+                .convert(c),
+                Term::Variable(0)
+            );
+
+            c.push("y".to_owned(), |c| {
+                assert_eq!(
+                    Ident {
+                        name: "y".to_owned()
+                    }
+                    .convert(c),
+                    Term::Variable(0)
+                );
+
+                assert_eq!(
+                    Ident {
+                        name: "x".to_owned()
+                    }
+                    .convert(c),
+                    Term::Variable(1)
+                );
+            })
+        })
+    }
+
+    #[test]
+    fn convert_ident_call() {
+        use ast::Term;
+        let context = Context::new();
+
+        assert_eq!(
+            Ident {
+                name: "call".to_owned()
+            }
+            .convert(&context),
+            Term::Call("call".to_owned(), vec![])
+        );
+
+        assert_eq!(
+            Ident {
+                name: "x".to_owned()
+            }
+            .convert(&context),
+            Term::Call("x".to_owned(), vec![])
+        );
+
+        context.push("x".to_owned(), |c| {
+            assert_eq!(
+                Ident {
+                    name: "call".to_owned()
+                }
+                .convert(c),
+                Term::Call("call".to_owned(), vec![])
+            );
+
+            assert_eq!(
+                Ident {
+                    name: "x".to_owned()
+                }
+                .convert(c),
+                Term::Variable(0)
+            );
+        })
     }
 
     macro_rules! parse_lit {
@@ -638,10 +789,23 @@ mod tests {
     }
 
     #[test]
+    fn convert_literal() {
+        use ast::Term;
+        let context = Context::new();
+        assert_eq!(
+            Literal {
+                contents: "hello".to_owned()
+            }
+            .convert(&context),
+            Term::Literal("hello".to_owned())
+        );
+    }
+
+    #[test]
     fn parse_fix_basic() {
         let expr = Expression {
             alt: Alt {
-                seqs: vec![Cat {
+                cats: vec![Cat {
                     terms: vec![Term::Epsilon],
                 }],
             },
@@ -707,7 +871,7 @@ mod tests {
                 },
                 expr: Expression {
                     alt: Alt {
-                        seqs: vec![Cat {
+                        cats: vec![Cat {
                             terms: vec![Term::Epsilon],
                         }],
                     },
@@ -716,5 +880,59 @@ mod tests {
         );
 
         assert_eq!(iter.collect::<String>(), " Not in fix");
+    }
+
+    #[test]
+    fn convert_fix_no_var() {
+        let context = Context::new();
+        let expr = Expression {
+            alt: Alt {
+                cats: vec![Cat {
+                    terms: vec![Term::Epsilon],
+                }],
+            },
+        };
+        assert_eq!(
+            Fix {
+                arg: Ident {
+                    name: "x".to_owned()
+                },
+                expr: expr.clone()
+            }
+            .convert(&context),
+            ast::Term::Fix(Box::new(expr.convert(&context)))
+        )
+    }
+
+    #[test]
+    fn convert_fix_var() {
+        use ast::Term;
+        let context = Context::new();
+        let expr = Expression {
+            alt: Alt {
+                cats: vec![Cat {
+                    terms: vec![super::Term::Ident(Ident {
+                        name: "x".to_owned(),
+                    })],
+                }],
+            },
+        };
+
+        assert_eq!(
+            Fix {
+                arg: Ident {
+                    name: "x".to_owned()
+                },
+                expr
+            }
+            .convert(&context),
+            Term::Fix(Box::new(Term::Alt(
+                Box::new(Term::Cat(
+                    Box::new(Term::Variable(0)),
+                    Box::new(Term::Epsilon)
+                )),
+                Box::new(Term::Bottom)
+            )))
+        )
     }
 }
