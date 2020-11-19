@@ -1,245 +1,479 @@
-use std::collections::BTreeSet;
+use std::convert::Infallible;
+use std::fmt::Display;
+
+use proc_macro2::Span;
+use syn::{Ident, LitStr, Token};
+use typed::FirstSetContext;
+use typed::FlastSetContext;
+use typed::NullContext;
+
+use self::typed::FirstSet;
+use self::typed::FlastSet;
+use self::typed::Type;
 
 pub mod convert;
+pub mod typed;
 
-const ITER_LIMIT: usize = 16;
+fn fix<R: PartialEq, F: FnMut(&R) -> R>(init: R, mut step: F) -> R {
+    let mut res = init;
+    let mut last = None;
 
-type Ident = String;
+    while last.map(|v| v != res).unwrap_or(true) {
+        last = Some(res);
+        res = step(last.as_ref().unwrap());
+    }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+    res
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct Epsilon {
+    span: Span,
+}
+
+impl Epsilon {
+    pub fn new(span: Span) -> Self {
+        Self { span }
+    }
+}
+
+impl Type for Epsilon {
+    type Err = Infallible;
+
+    fn is_nullable<C: NullContext>(&self, _context: &mut C) -> Option<bool> {
+        Some(true)
+    }
+
+    fn first_set<C: FirstSetContext>(&self, _context: &mut C) -> Option<FirstSet> {
+        Some(FirstSet::new())
+    }
+
+    fn flast_set<C: FlastSetContext>(&self, _context: &mut C) -> Option<FlastSet> {
+        Some(FlastSet::new())
+    }
+
+    fn well_typed<C: FlastSetContext>(self, _context: &mut C) -> Result<Typed, Self::Err> {
+        Ok(Typed::Epsilon)
+    }
+}
+
+pub type Literal = LitStr;
+
+impl Type for Literal {
+    type Err = Infallible;
+
+    fn is_nullable<C: NullContext>(&self, _context: &mut C) -> Option<bool> {
+        Some(self.value().is_empty())
+    }
+
+    fn first_set<C: FirstSetContext>(&self, _context: &mut C) -> Option<FirstSet> {
+        Some(FirstSet::of_str(&self.value()))
+    }
+
+    fn flast_set<C: FlastSetContext>(&self, _context: &mut C) -> Option<FlastSet> {
+        Some(FlastSet::new())
+    }
+
+    fn well_typed<C: FlastSetContext>(self, _context: &mut C) -> Result<Typed, Self::Err> {
+        Ok(Typed::Literal(self.value()))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Cat {
+    fst: Box<Term>,
+    punct: Token![.],
+    snd: Box<Term>,
+}
+
+impl Cat {
+    pub fn new(fst: Term, punct: Token![.], snd: Term) -> Self {
+        Self {
+            fst: Box::new(fst),
+            punct,
+            snd: Box::new(snd),
+        }
+    }
+}
+
+impl Type for Cat {
+    type Err = CatError;
+
+    fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool> {
+        Some(self.fst.is_nullable(context)? && self.snd.is_nullable(context)?)
+    }
+
+    fn first_set<C: FirstSetContext>(&self, context: &mut C) -> Option<FirstSet> {
+        let set = self.fst.first_set(context)?;
+
+        if self.fst.is_nullable(context)? {
+            Some(set.union(self.snd.first_set(context)?))
+        } else {
+            Some(set)
+        }
+    }
+
+    fn flast_set<C: FlastSetContext>(&self, context: &mut C) -> Option<FlastSet> {
+        let set = self.snd.flast_set(context)?;
+
+        if self.snd.is_nullable(context)? {
+            Some(
+                set.union_first(self.snd.first_set(context)?)
+                    .union(self.fst.flast_set(context)?),
+            )
+        } else {
+            Some(set)
+        }
+    }
+
+    fn well_typed<C: FlastSetContext>(self, context: &mut C) -> Result<Typed, Self::Err> {
+        let fst = self
+            .fst
+            .well_typed(context)
+            .map_err(|e| CatError::First(Box::new(e)))?;
+        let snd = self
+            .snd
+            .well_typed(context)
+            .map_err(|e| CatError::Second(Box::new(e)))?;
+
+        if fst.is_nullable() {
+            Err(CatError::FirstNullable(fst))
+        } else if !fst.flast_set().intersect_first(&snd.first_set()).is_empty() {
+            Err(CatError::FirstFlastOverlap(fst, snd))
+        } else {
+            Ok(Typed::Cat(Box::new(fst), Box::new(snd)))
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum CatError {
+    First(Box<TermError>),
+    Second(Box<TermError>),
+    FirstNullable(Typed),
+    FirstFlastOverlap(Typed, Typed),
+}
+
+impl Display for CatError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        todo!()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Alt {
+    left: Box<Term>,
+    punct: Token![|],
+    right: Box<Term>,
+}
+
+impl Alt {
+    pub fn new(left: Term, punct: Token![|], right: Term) -> Self {
+        Self {
+            left: Box::new(left),
+            punct,
+            right: Box::new(right),
+        }
+    }
+}
+
+impl Type for Alt {
+    type Err = AltError;
+
+    fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool> {
+        Some(self.left.is_nullable(context)? || self.right.is_nullable(context)?)
+    }
+
+    fn first_set<C: FirstSetContext>(&self, context: &mut C) -> Option<FirstSet> {
+        Some(
+            self.left
+                .first_set(context)?
+                .union(self.right.first_set(context)?),
+        )
+    }
+
+    fn flast_set<C: FlastSetContext>(&self, context: &mut C) -> Option<FlastSet> {
+        Some(
+            self.left
+                .flast_set(context)?
+                .union(self.right.flast_set(context)?),
+        )
+    }
+
+    fn well_typed<C: FlastSetContext>(self, context: &mut C) -> Result<Typed, Self::Err> {
+        let left = self
+            .left
+            .well_typed(context)
+            .map_err(|e| AltError::Left(Box::new(e)))?;
+        let right = self
+            .right
+            .well_typed(context)
+            .map_err(|e| AltError::Right(Box::new(e)))?;
+
+        if left.is_nullable() && right.is_nullable() {
+            Err(AltError::BothNullable(left, right))
+        } else if !left.first_set().intersect(&right.first_set()).is_empty() {
+            Err(AltError::FirstOverlap(left, right))
+        } else {
+            Ok(Typed::Alt(Box::new(left), Box::new(right)))
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum AltError {
+    Left(Box<TermError>),
+    Right(Box<TermError>),
+    BothNullable(Typed, Typed),
+    FirstOverlap(Typed, Typed),
+}
+
+impl Display for AltError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        todo!()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Fix {
+    span: Span,
+    arg: Ident,
+    inner: Box<Term>,
+}
+
+impl Fix {
+    pub fn new(arg: Ident, inner: Term, span: Span) -> Self {
+        Self {
+            arg,
+            inner: Box::new(inner),
+            span,
+        }
+    }
+}
+
+impl Type for Fix {
+    type Err = TermError;
+
+    fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool> {
+        fix(Some(false), |last| {
+            last.as_ref()
+                .copied()
+                .and_then(|null| context.push_nullable(null, |ctx| self.inner.is_nullable(ctx)))
+        })
+    }
+
+    fn first_set<C: FirstSetContext>(&self, context: &mut C) -> Option<FirstSet> {
+        let nullable = self.is_nullable(context)?;
+        fix(Some(FirstSet::new()), |last| {
+            last.as_ref().cloned().and_then(|first_set| {
+                context.push_first_set(nullable, first_set, |ctx| self.inner.first_set(ctx))
+            })
+        })
+    }
+
+    fn flast_set<C: FlastSetContext>(&self, context: &mut C) -> Option<FlastSet> {
+        let nullable = self.is_nullable(context)?;
+        let first_set = self.first_set(context)?;
+        fix(Some(FlastSet::new()), |last| {
+            last.as_ref().cloned().and_then(|flast_set| {
+                context.push_flast_set(nullable, first_set.clone(), flast_set, |ctx| {
+                    self.inner.flast_set(ctx)
+                })
+            })
+        })
+    }
+
+    fn well_typed<C: FlastSetContext>(self, context: &mut C) -> Result<Typed, Self::Err> {
+        // FIXME: free variables cause panic
+        let nullable = self.is_nullable(context).unwrap();
+        let first_set = self.first_set(context).unwrap();
+        let flast_set = self.flast_set(context).unwrap();
+
+        context
+            .push_flast_set(nullable, first_set, flast_set, |ctx| {
+                self.inner.well_typed(ctx)
+            })
+            .map(|inner| Typed::Fix(Box::new(inner)))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Variable {
+    name: Ident,
+    index: usize,
+}
+
+impl Variable {
+    pub fn new(name: Ident, index: usize) -> Self {
+        Self { name, index }
+    }
+}
+
+impl Type for Variable {
+    type Err = VariableError;
+
+    fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool> {
+        context.get_nullable(self.index)
+    }
+
+    fn first_set<C: FirstSetContext>(&self, context: &mut C) -> Option<FirstSet> {
+        context.get_first_set(self.index)
+    }
+
+    fn flast_set<C: FlastSetContext>(&self, context: &mut C) -> Option<FlastSet> {
+        context.get_flast_set(self.index)
+    }
+
+    fn well_typed<C: FlastSetContext>(self, context: &mut C) -> Result<Typed, Self::Err> {
+        match context.get_flast_set(self.index) {
+            Some(_) => Ok(Typed::Variable(self.index)),
+            None => Err(VariableError::FreeVariable(self)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum VariableError {
+    FreeVariable(Variable),
+}
+
+impl Display for VariableError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        todo!()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Call {
+    span: Span,
+    name: Ident,
+    args: Vec<Term>,
+}
+
+impl Call {
+    pub fn new(name: Ident, args: Vec<Term>, span: Span) -> Self {
+        Self { name, args, span }
+    }
+}
+
+impl Type for Call {
+    type Err = Infallible;
+
+    fn is_nullable<C: NullContext>(&self, _context: &mut C) -> Option<bool> {
+        todo!()
+    }
+
+    fn first_set<C: FirstSetContext>(&self, _context: &mut C) -> Option<FirstSet> {
+        todo!()
+    }
+
+    fn flast_set<C: FlastSetContext>(&self, _context: &mut C) -> Option<FlastSet> {
+        todo!()
+    }
+
+    fn well_typed<C: FlastSetContext>(self, _context: &mut C) -> Result<Typed, Self::Err> {
+        todo!()
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum Term {
-    Epsilon,
-    Bottom,
-    Literal(String),
-    Cat(Box<Term>, Box<Term>),
-    Alt(Box<Term>, Box<Term>),
-    Fix(Box<Term>), // Uses de Bruijn indices
-    Variable(usize),
-    Call(Ident, Vec<Term>),
+    Epsilon(Epsilon),
+    Literal(Literal),
+    Cat(Cat),
+    Alt(Alt),
+    Fix(Fix),
+    Variable(Variable),
+    Call(Call),
 }
 
-fn first_to_null(vars: &[(bool, BTreeSet<char>)]) -> Vec<bool> {
-    vars.iter().map(|(null, _)| *null).collect::<Vec<_>>()
-}
+impl Type for Term {
+    type Err = TermError;
 
-fn flast_to_null(vars: &[(bool, BTreeSet<char>, BTreeSet<char>)]) -> Vec<bool> {
-    vars.iter().map(|(null, _, _)| *null).collect::<Vec<_>>()
-}
-
-fn flast_to_first(vars: &[(bool, BTreeSet<char>, BTreeSet<char>)]) -> Vec<(bool, BTreeSet<char>)> {
-    vars.iter()
-        .map(|(null, first, _)| (*null, first.clone()))
-        .collect::<Vec<_>>()
-}
-
-fn ctx_to_flast(ctx: &[Term]) -> Vec<(bool, BTreeSet<char>, BTreeSet<char>)> {
-    match ctx {
-        [] => Vec::new(),
-        [.., term] => {
-            let mut rest = ctx_to_flast(&ctx[..ctx.len() - 1]);
-            let null = term.null(&flast_to_null(&rest));
-            let first = term.first(&flast_to_first(&rest));
-            let flast = term.flast(&rest);
-            rest.push((null, first, flast));
-            rest
-        }
-    }
-}
-
-fn ctx_to_first(ctx: &[Term]) -> Vec<(bool, BTreeSet<char>)> {
-    match ctx {
-        [] => Vec::new(),
-        [.., term] => {
-            let mut rest = ctx_to_first(&ctx[..ctx.len() - 1]);
-            let null = term.null(&first_to_null(&rest));
-            let first = term.first(&rest);
-            rest.push((null, first));
-            rest
-        }
-    }
-}
-
-/// NOTE: This assumes the variables are well-formed. Need to fix in general
-impl Term {
-    pub fn null(&self, vars: &[bool]) -> bool {
+    fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool> {
         match self {
-            Self::Epsilon => true,
-            Self::Bottom => false,
-            Self::Literal(s) => s.is_empty(),
-            Self::Cat(fst, snd) => fst.null(vars) && snd.null(vars),
-            Self::Alt(fst, snd) => fst.null(vars) || snd.null(vars),
-            Self::Fix(inner) => {
-                let mut res = false;
-                let mut last = None;
-                let mut vars = vars.to_owned();
-                let mut i = 0;
-
-                while last.map(|s| s != res).unwrap_or(true) {
-                    if i >= ITER_LIMIT {
-                        panic!("Too many iterations")
-                    } else {
-                        i += 1
-                    }
-
-                    last = Some(res);
-                    vars.push(res);
-                    res = inner.null(&vars);
-                    vars.pop();
-                }
-
-                res
-            }
-            Self::Variable(index) => vars[vars.len() - index - 1],
-            Self::Call(_ident, _args) => unimplemented!(),
+            Self::Epsilon(e) => e.is_nullable(context),
+            Self::Literal(e) => e.is_nullable(context),
+            Self::Cat(e) => e.is_nullable(context),
+            Self::Alt(e) => e.is_nullable(context),
+            Self::Fix(e) => e.is_nullable(context),
+            Self::Variable(e) => e.is_nullable(context),
+            Self::Call(e) => e.is_nullable(context),
         }
     }
 
-    pub fn first(&self, vars: &[(bool, BTreeSet<char>)]) -> BTreeSet<char> {
+    fn first_set<C: FirstSetContext>(&self, context: &mut C) -> Option<FirstSet> {
         match self {
-            Self::Epsilon => BTreeSet::new(),
-            Self::Bottom => BTreeSet::new(),
-            Self::Literal(s) => {
-                let mut set = BTreeSet::new();
-                if let Some(c) = s.chars().next() {
-                    set.insert(c);
-                }
-                set
-            }
-            Self::Cat(fst, snd) => {
-                let mut set = fst.first(vars);
-                if fst.null(&first_to_null(vars)) {
-                    set.append(&mut snd.first(vars))
-                }
-                set
-            }
-            Self::Alt(fst, snd) => {
-                let mut set = fst.first(vars);
-                set.append(&mut snd.first(vars));
-                set
-            }
-            Self::Fix(inner) => {
-                let mut res = BTreeSet::new();
-                let mut last = None;
-                let null = self.null(&first_to_null(vars));
-                let mut vars = vars.to_owned();
-                let mut i = 0;
-
-                while last.map(|s| s != res).unwrap_or(true) {
-                    if i >= ITER_LIMIT {
-                        panic!("Too many iterations")
-                    } else {
-                        i += 1
-                    }
-
-                    last = Some(res.clone());
-                    vars.push((null, res));
-                    res = inner.first(&vars);
-                    vars.pop();
-                }
-
-                res
-            }
-            Self::Variable(index) => vars[vars.len() - index - 1].1.clone(),
-            Self::Call(_, _) => unimplemented!(),
+            Self::Epsilon(e) => e.first_set(context),
+            Self::Literal(e) => e.first_set(context),
+            Self::Cat(e) => e.first_set(context),
+            Self::Alt(e) => e.first_set(context),
+            Self::Fix(e) => e.first_set(context),
+            Self::Variable(e) => e.first_set(context),
+            Self::Call(e) => e.first_set(context),
         }
     }
 
-    pub fn flast(&self, vars: &[(bool, BTreeSet<char>, BTreeSet<char>)]) -> BTreeSet<char> {
+    fn flast_set<C: FlastSetContext>(&self, context: &mut C) -> Option<FlastSet> {
         match self {
-            Self::Epsilon => BTreeSet::new(),
-            Self::Bottom => BTreeSet::new(),
-            Self::Literal(_) => BTreeSet::new(),
-            Self::Cat(fst, snd) => {
-                let mut set = snd.flast(vars);
-                if snd.null(&flast_to_null(vars)) {
-                    set.append(&mut snd.first(&flast_to_first(vars)));
-                    set.append(&mut fst.flast(vars));
-                }
-                set
-            }
-            Self::Alt(fst, snd) => {
-                let mut set = fst.flast(vars);
-                set.append(&mut snd.flast(vars));
-                set
-            }
-            Self::Fix(inner) => {
-                let mut res = BTreeSet::new();
-                let mut last = None;
-                let null = self.null(&flast_to_null(vars));
-                let first = self.first(&flast_to_first(vars));
-                let mut vars = vars.to_owned();
-                let mut i = 0;
-
-                while last.map(|s| s != res).unwrap_or(true) {
-                    if i >= ITER_LIMIT {
-                        panic!("Too many iterations")
-                    } else {
-                        i += 1
-                    }
-
-                    last = Some(res.clone());
-                    vars.push((null, first.clone(), res));
-                    res = inner.flast(&vars);
-                    vars.pop();
-                }
-
-                res
-            }
-            Self::Variable(index) => vars[vars.len() - index - 1].2.clone(),
-            Self::Call(_, _) => unimplemented!(),
+            Self::Epsilon(e) => e.flast_set(context),
+            Self::Literal(e) => e.flast_set(context),
+            Self::Cat(e) => e.flast_set(context),
+            Self::Alt(e) => e.flast_set(context),
+            Self::Fix(e) => e.flast_set(context),
+            Self::Variable(e) => e.flast_set(context),
+            Self::Call(e) => e.flast_set(context),
         }
     }
 
-    pub fn type_check(self, ctx: &[Self]) -> Result<Typed, TypeError> {
+    fn well_typed<C: FlastSetContext>(self, context: &mut C) -> Result<Typed, Self::Err> {
         match self {
-            Self::Epsilon => Ok(Typed::Epsilon),
-            Self::Bottom => Ok(Typed::Bottom),
-            Self::Literal(s) => Ok(Typed::Literal(s)),
-            Self::Cat(fst, snd) => {
-                let vars = ctx_to_flast(ctx);
-                if fst.null(&flast_to_null(&vars)) {
-                    Err(TypeError::CatFirstNull(*fst, *snd))
-                } else if fst.flast(&vars).intersection(&snd.first(&flast_to_first(&vars))).next().is_some() {
-                    Err(TypeError::CatFirstFlastOverlap(*fst, *snd))
-                } else {
-                    Ok(Typed::Cat(Box::new(fst.type_check(ctx)?), Box::new(snd.type_check(ctx)?)))
-                }
-            }
-            Self::Alt(fst, snd) => {
-                let vars = ctx_to_first(ctx);
-                let null = first_to_null(&vars);
-                if fst.null(&null) && snd.null(&null) {
-                    Err(TypeError::AltBothNull(*fst, *snd))
-                } else if fst.first(&vars).intersection(&snd.first(&vars)).next().is_some() {
-                    Err(TypeError::AltFirstOverlap(*fst, *snd))
-                } else {
-                    Ok(Typed::Alt(Box::new(fst.type_check(ctx)?), Box::new(snd.type_check(ctx)?)))
-                }
-            }
-            Self::Fix(inner) => {
-                let mut ctx = ctx.to_owned();
-                ctx.push(Self::Fix(inner.clone()));
-                Ok(Typed::Fix(Box::new(inner.type_check(&ctx)?)))
-            }
-            Self::Variable(index) => {
-                if index < ctx.len() {
-                    Ok(Typed::Variable(index))
-                } else {
-                    Err(TypeError::FreeVariable(index))
-                }
-            }
-            Self::Call(_, _) => unimplemented!("No functions yet")
+            Self::Epsilon(e) => e.well_typed(context).map_err(TermError::from),
+            Self::Literal(e) => e.well_typed(context).map_err(TermError::from),
+            Self::Cat(e) => e.well_typed(context).map_err(TermError::from),
+            Self::Alt(e) => e.well_typed(context).map_err(TermError::from),
+            Self::Fix(e) => e.well_typed(context).map_err(TermError::from),
+            Self::Variable(e) => e.well_typed(context).map_err(TermError::from),
+            Self::Call(e) => e.well_typed(context).map_err(TermError::from),
         }
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum TypeError {
-    CatFirstNull(Term, Term),
-    CatFirstFlastOverlap(Term, Term),
-    AltBothNull(Term, Term),
-    AltFirstOverlap(Term, Term),
-    FreeVariable(usize)
+#[derive(Debug)]
+pub enum TermError {
+    Cat(CatError),
+    Alt(AltError),
+    Variable(VariableError),
+}
+
+impl From<Infallible> for TermError {
+    fn from(other: Infallible) -> Self {
+        match other {}
+    }
+}
+
+impl From<CatError> for TermError {
+    fn from(other: CatError) -> Self{
+        Self::Cat(other)
+    }
+}
+
+impl From<AltError> for TermError {
+    fn from(other: AltError) -> Self{
+        Self::Alt(other)
+    }
+}
+
+impl From<VariableError> for TermError {
+    fn from(other: VariableError) -> Self{
+        Self::Variable(other)
+    }
+}
+
+impl Display for TermError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        todo!()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -254,147 +488,167 @@ pub enum Typed {
     Call(Ident, Vec<Typed>),
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn null_epsilon() {
-        assert!(Term::Epsilon.null(&[]));
+impl Typed {
+    pub fn is_nullable(&self) -> bool {
+        todo!()
     }
 
-    #[test]
-    fn not_null_bottom() {
-        assert!(!Term::Bottom.null(&[]));
+    pub fn first_set(&self) -> FirstSet {
+        todo!()
     }
 
-    #[test]
-    fn not_null_normal_literal() {
-        assert!(!Term::Literal("x".to_owned()).null(&[]))
-    }
-
-    #[test]
-    fn null_empty_literal() {
-        assert!(Term::Literal("".to_owned()).null(&[]))
-    }
-
-    #[test]
-    fn null_cat_both_null() {
-        assert!(Term::Cat(Box::new(Term::Epsilon), Box::new(Term::Epsilon)).null(&[]))
-    }
-
-    #[test]
-    fn not_null_cat_first_not_null() {
-        assert!(!Term::Cat(Box::new(Term::Bottom), Box::new(Term::Epsilon)).null(&[]))
-    }
-
-    #[test]
-    fn not_null_cat_second_not_null() {
-        assert!(!Term::Cat(Box::new(Term::Epsilon), Box::new(Term::Bottom)).null(&[]))
-    }
-
-    #[test]
-    fn not_null_alt_both_not_null() {
-        assert!(!Term::Alt(Box::new(Term::Bottom), Box::new(Term::Bottom)).null(&[]))
-    }
-
-    #[test]
-    fn null_alt_first_null() {
-        assert!(Term::Alt(Box::new(Term::Epsilon), Box::new(Term::Bottom)).null(&[]))
-    }
-
-    #[test]
-    fn null_alt_second_null() {
-        assert!(Term::Alt(Box::new(Term::Bottom), Box::new(Term::Epsilon)).null(&[]))
-    }
-
-    #[test]
-    fn not_null_fix_simple_inner() {
-        assert!(!Term::Fix(Box::new(Term::Bottom)).null(&[]))
-    }
-
-    #[test]
-    fn null_fix_simple_inner() {
-        assert!(Term::Fix(Box::new(Term::Epsilon)).null(&[]))
-    }
-
-    #[test]
-    fn not_null_fix_var_inner() {
-        assert!(!Term::Fix(Box::new(Term::Variable(0))).null(&[]))
-    }
-
-    #[test]
-    fn null_fix_var_inner() {
-        assert!(Term::Fix(Box::new(Term::Alt(
-            Box::new(Term::Epsilon),
-            Box::new(Term::Variable(0))
-        )))
-        .null(&[]))
-    }
-
-    #[test]
-    fn first_epsilon_empty() {
-        assert_eq!(Term::Epsilon.first(&[]), BTreeSet::new())
-    }
-
-    #[test]
-    fn first_bottom_empty() {
-        assert_eq!(Term::Bottom.first(&[]), BTreeSet::new())
-    }
-
-    #[test]
-    fn first_literal_first_char() {
-        let set = vec!['x'].into_iter().collect();
-        assert_eq!(Term::Literal("x".to_owned()).first(&[]), set);
-        let set = vec!['h'].into_iter().collect();
-        assert_eq!(Term::Literal("hello".to_owned()).first(&[]), set);
-        assert_eq!(Term::Literal("".to_owned()).first(&[]), BTreeSet::new());
-    }
-
-    #[test]
-    fn first_cat_first_not_null() {
-        let set = vec!['x'].into_iter().collect();
-        assert_eq!(
-            Term::Cat(
-                Box::new(Term::Literal("x".to_owned())),
-                Box::new(Term::Literal("y".to_owned()))
-            )
-            .first(&[]),
-            set
-        );
-    }
-
-    #[test]
-    fn first_cat_first_null() {
-        let set = vec!['x', 'y'].into_iter().collect();
-        assert_eq!(
-            Term::Cat(
-                Box::new(Term::Alt(
-                    Box::new(Term::Epsilon),
-                    Box::new(Term::Literal("x".to_owned()))
-                )),
-                Box::new(Term::Literal("y".to_owned()))
-            )
-            .first(&[]),
-            set
-        );
-    }
-
-    // TODO: test flast
-
-    #[test]
-    fn types_epsilon() {
-        assert_eq!(Term::Epsilon.type_check(&[]), Ok(Typed::Epsilon))
-    }
-
-    #[test]
-    fn types_bottom() {
-        assert_eq!(Term::Bottom.type_check(&[]), Ok(Typed::Bottom))
-    }
-
-    #[test]
-    fn types_literal() {
-        assert_eq!(Term::Literal("x".to_owned()).type_check(&[]), Ok(Typed::Literal("x".to_owned())));
-        assert_eq!(Term::Literal("".to_owned()).type_check(&[]), Ok(Typed::Literal("".to_owned())))
+    pub fn flast_set(&self) -> FlastSet {
+        todo!()
     }
 }
+
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+
+//     #[test]
+//     fn null_epsilon() {
+//         assert!(Term::Epsilon.null(&[]));
+//     }
+
+//     #[test]
+//     fn not_null_bottom() {
+//         assert!(!Term::Bottom.null(&[]));
+//     }
+
+//     #[test]
+//     fn not_null_normal_literal() {
+//         assert!(!Term::Literal("x".to_owned()).null(&[]))
+//     }
+
+//     #[test]
+//     fn null_empty_literal() {
+//         assert!(Term::Literal("".to_owned()).null(&[]))
+//     }
+
+//     #[test]
+//     fn null_cat_both_null() {
+//         assert!(Term::Cat(Box::new(Term::Epsilon), Box::new(Term::Epsilon)).null(&[]))
+//     }
+
+//     #[test]
+//     fn not_null_cat_first_not_null() {
+//         assert!(!Term::Cat(Box::new(Term::Bottom), Box::new(Term::Epsilon)).null(&[]))
+//     }
+
+//     #[test]
+//     fn not_null_cat_second_not_null() {
+//         assert!(!Term::Cat(Box::new(Term::Epsilon), Box::new(Term::Bottom)).null(&[]))
+//     }
+
+//     #[test]
+//     fn not_null_alt_both_not_null() {
+//         assert!(!Term::Alt(Box::new(Term::Bottom), Box::new(Term::Bottom)).null(&[]))
+//     }
+
+//     #[test]
+//     fn null_alt_first_null() {
+//         assert!(Term::Alt(Box::new(Term::Epsilon), Box::new(Term::Bottom)).null(&[]))
+//     }
+
+//     #[test]
+//     fn null_alt_second_null() {
+//         assert!(Term::Alt(Box::new(Term::Bottom), Box::new(Term::Epsilon)).null(&[]))
+//     }
+
+//     #[test]
+//     fn not_null_fix_simple_inner() {
+//         assert!(!Term::Fix(Box::new(Term::Bottom)).null(&[]))
+//     }
+
+//     #[test]
+//     fn null_fix_simple_inner() {
+//         assert!(Term::Fix(Box::new(Term::Epsilon)).null(&[]))
+//     }
+
+//     #[test]
+//     fn not_null_fix_var_inner() {
+//         assert!(!Term::Fix(Box::new(Term::Variable(0))).null(&[]))
+//     }
+
+//     #[test]
+//     fn null_fix_var_inner() {
+//         assert!(Term::Fix(Box::new(Term::Alt(
+//             Box::new(Term::Epsilon),
+//             Box::new(Term::Variable(0))
+//         )))
+//         .null(&[]))
+//     }
+
+//     #[test]
+//     fn first_epsilon_empty() {
+//         assert_eq!(Term::Epsilon.first(&[]), BTreeSet::new())
+//     }
+
+//     #[test]
+//     fn first_bottom_empty() {
+//         assert_eq!(Term::Bottom.first(&[]), BTreeSet::new())
+//     }
+
+//     #[test]
+//     fn first_literal_first_char() {
+//         let set = vec!['x'].into_iter().collect();
+//         assert_eq!(Term::Literal("x".to_owned()).first(&[]), set);
+//         let set = vec!['h'].into_iter().collect();
+//         assert_eq!(Term::Literal("hello".to_owned()).first(&[]), set);
+//         assert_eq!(Term::Literal("".to_owned()).first(&[]), BTreeSet::new());
+//     }
+
+//     #[test]
+//     fn first_cat_first_not_null() {
+//         let set = vec!['x'].into_iter().collect();
+//         assert_eq!(
+//             Term::Cat(
+//                 Box::new(Term::Literal("x".to_owned())),
+//                 Box::new(Term::Literal("y".to_owned()))
+//             )
+//             .first(&[]),
+//             set
+//         );
+//     }
+
+//     #[test]
+//     fn first_cat_first_null() {
+//         let set = vec!['x', 'y'].into_iter().collect();
+//         assert_eq!(
+//             Term::Cat(
+//                 Box::new(Term::Alt(
+//                     Box::new(Term::Epsilon),
+//                     Box::new(Term::Literal("x".to_owned()))
+//                 )),
+//                 Box::new(Term::Literal("y".to_owned()))
+//             )
+//             .first(&[]),
+//             set
+//         );
+//     }
+
+//     // TODO: test flast
+
+//     #[test]
+//     fn types_epsilon() {
+//         assert_eq!(Term::Epsilon.type_check(&[]), Ok(Typed::Epsilon))
+//     }
+
+//     #[test]
+//     fn types_bottom() {
+//         assert_eq!(Term::Bottom.type_check(&[]), Ok(Typed::Bottom))
+//     }
+
+//     #[test]
+//     fn types_literal() {
+//         assert_eq!(
+//             Term::Literal("x".to_owned()).type_check(&[]),
+//             Ok(Typed::Literal("x".to_owned()))
+//         );
+//         assert_eq!(
+//             Term::Literal("".to_owned()).type_check(&[]),
+//             Ok(Typed::Literal("".to_owned()))
+//         )
+//     }
+// }

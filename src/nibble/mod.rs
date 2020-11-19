@@ -1,10 +1,10 @@
-pub mod parse;
-
 use crate::ast::{
     self,
     convert::{Context, Convert},
 };
+use proc_macro2::Span;
 use syn::ext::IdentExt;
+use syn::punctuated::Pair;
 use syn::punctuated::Punctuated;
 use syn::{
     parse::{Parse, ParseStream},
@@ -30,7 +30,7 @@ impl Parse for Epsilon {
 
 impl Convert for Epsilon {
     fn convert(self, _: &Context) -> ast::Term {
-        ast::Term::Epsilon
+        ast::Term::Epsilon(ast::Epsilon::new(self.paren_tok.span))
     }
 }
 
@@ -42,9 +42,10 @@ impl Convert for Ident {
         let name = self.to_string();
 
         if let Some(variable) = context.get(&name) {
-            Term::Variable(variable)
+            Term::Variable(ast::Variable::new(self, variable))
         } else {
-            Term::Call(name, vec![])
+            let span = self.span();
+            Term::Call(ast::Call::new(self, Vec::new(), span))
         }
     }
 }
@@ -53,7 +54,7 @@ type Literal = syn::LitStr;
 
 impl Convert for Literal {
     fn convert(self, _context: &Context) -> ast::Term {
-        ast::Term::Literal(self.value())
+        ast::Term::Literal(self)
     }
 }
 
@@ -81,10 +82,21 @@ impl Parse for Call {
 impl Convert for Call {
     fn convert(self, context: &Context) -> ast::Term {
         use ast::Term;
-        Term::Call(
-            self.name.to_string(),
-            self.args.into_iter().map(|e| e.convert(context)).collect(),
-        )
+        let span = self.name
+            .span()
+            .join(self.paren_tok.span)
+            .unwrap_or_else(Span::call_site);
+        Term::Call(ast::Call::new(
+            self.name,
+            self.args
+                .into_pairs()
+                .map(|pair| match pair {
+                    Pair::Punctuated(t, _) => t.convert(context),
+                    Pair::End(t) => t.convert(context),
+                })
+                .collect(),
+            span,
+        ))
     }
 }
 
@@ -118,8 +130,14 @@ impl Convert for Fix {
     fn convert(self, context: &Context) -> ast::Term {
         use ast::Term;
         let expr = self.expr;
-        Term::Fix(Box::new(
-            context.push(self.arg.to_string(), |c| expr.convert(c)),
+        let arg_name = self.arg.to_string();
+        Term::Fix(ast::Fix::new(
+            self.arg,
+            context.push(arg_name, |c| expr.convert(c)),
+            self.bracket_token
+                .span
+                .join(self.paren_token.span)
+                .unwrap_or_else(Span::call_site),
         ))
     }
 }
@@ -195,9 +213,8 @@ impl Parse for Term {
 
 impl Convert for Term {
     fn convert(self, context: &Context) -> ast::Term {
-        use ast::Term;
         match self {
-            Self::Epsilon(_) => Term::Epsilon,
+            Self::Epsilon(e) => e.convert(context),
             Self::Ident(i) => i.convert(context),
             Self::Literal(l) => l.convert(context),
             Self::Call(c) => c.convert(context),
@@ -223,8 +240,14 @@ impl Parse for Cat {
 impl Convert for Cat {
     fn convert(self, context: &Context) -> ast::Term {
         use ast::Term;
-        self.terms.into_iter().rfold(Term::Epsilon, |exp, term| {
-            Term::Cat(Box::new(term.convert(context)), Box::new(exp))
+        let mut iter = self.terms.into_pairs();
+        let init = match iter.next_back().unwrap() {
+            Pair::Punctuated(_, _) => unreachable!(),
+            Pair::End(t) => t.convert(context),
+        };
+        iter.rfold(init, |term, pair| match pair {
+            Pair::Punctuated(t, p) => Term::Cat(ast::Cat::new(t.convert(context), p, term)),
+            Pair::End(_) => unreachable!(),
         })
     }
 }
@@ -245,8 +268,14 @@ impl Parse for Alt {
 impl Convert for Alt {
     fn convert(self, context: &Context) -> ast::Term {
         use ast::Term;
-        self.cats.into_iter().rfold(Term::Bottom, |exp, cat| {
-            Term::Alt(Box::new(cat.convert(context)), Box::new(exp))
+        let mut iter = self.cats.into_pairs();
+        let init = match iter.next_back().unwrap() {
+            Pair::Punctuated(_, _) => unreachable!(),
+            Pair::End(t) => t.convert(context),
+        };
+        iter.rfold(init, |term, pair| match pair {
+            Pair::Punctuated(t, p) => Term::Alt(ast::Alt::new(t.convert(context), p, term)),
+            Pair::End(_) => unreachable!(),
         })
     }
 }
@@ -255,8 +284,8 @@ type Expression = Alt;
 
 #[cfg(test)]
 mod tests {
-    use syn::parse_str;
     use super::{Epsilon, Ident, Literal};
+    use syn::parse_str;
 
     #[test]
     fn parse_epsilon() {
