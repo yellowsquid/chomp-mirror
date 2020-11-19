@@ -5,3 +5,8 @@ authors = ["Greg Brown <gmb60@cam.ac.uk>"]
 edition = "2018"
 
 [dependencies]
+proc-macro2 = "1.0.24"
+
+[dependencies.syn]
+version = "1.0.48"
+features = ["extra-traits"]
