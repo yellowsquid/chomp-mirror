@@ -87,10 +87,67 @@ pub trait NullContext {
     fn push_nullable<F: FnOnce(&mut Self::PushNull) -> R, R>(&mut self, nullable: bool, f: F) -> R;
 }
 
+impl NullContext for Vec<bool> {
+    type PushNull = Self;
+
+    fn get_depth(&self) -> usize {
+        self.len()
+    }
+
+    fn get_nullable(&self, index: usize) -> Option<bool> {
+        self.get(self.len() - index - 1).copied()
+    }
+
+    fn push_nullable<F: FnOnce(&mut Self::PushNull) -> R, R>(&mut self, nullable: bool, f: F) -> R {
+        self.push(nullable);
+        let res = f(self);
+        self.pop();
+        res
+    }
+}
+
+impl NullContext for Vec<(bool, FirstSet)> {
+    type PushNull = Self;
+
+    fn get_depth(&self) -> usize {
+        self.len()
+    }
+
+    fn get_nullable(&self, index: usize) -> Option<bool> {
+        self.get(self.len() - index - 1).map(|(null, _)| null).copied()
+    }
+
+    fn push_nullable<F: FnOnce(&mut Self::PushNull) -> R, R>(&mut self, nullable: bool, f: F) -> R {
+        self.push((nullable, FirstSet::new()));
+        let res = f(self);
+        self.pop();
+        res
+    }
+}
+
+impl NullContext for Vec<(bool, FirstSet, FlastSet)> {
+    type PushNull = Self;
+
+    fn get_depth(&self) -> usize {
+        self.len()
+    }
+
+    fn get_nullable(&self, index: usize) -> Option<bool> {
+        self.get(self.len() - index - 1).map(|(null, _, _)| null).copied()
+    }
+
+    fn push_nullable<F: FnOnce(&mut Self::PushNull) -> R, R>(&mut self, nullable: bool, f: F) -> R {
+        self.push((nullable, FirstSet::new(), FlastSet::new()));
+        let res = f(self);
+        self.pop();
+        res
+    }
+}
+
 pub trait FirstSetContext: NullContext {
     type PushFirstSet: FirstSetContext;
 
-    fn get_first_set(&self, index: usize) -> Option<FirstSet>;
+    fn get_first_set(&self, index: usize) -> Option<&FirstSet>;
 
     fn push_first_set<F: FnOnce(&mut Self::PushFirstSet) -> R, R>(
         &mut self,
@@ -100,10 +157,50 @@ pub trait FirstSetContext: NullContext {
     ) -> R;
 }
 
+impl FirstSetContext for Vec<(bool, FirstSet)> {
+    type PushFirstSet = Self;
+
+    fn get_first_set(&self, index: usize) -> Option<&FirstSet> {
+        self.get(self.len() - index - 1).map(|(_, first_set)| first_set)
+    }
+
+    fn push_first_set<F: FnOnce(&mut Self::PushFirstSet) -> R, R>(
+        &mut self,
+        nullable: bool,
+        first_set: FirstSet,
+        f: F,
+    ) -> R {
+        self.push((nullable, first_set));
+        let res = f(self);
+        self.pop();
+        res
+    }
+}
+
+impl FirstSetContext for Vec<(bool, FirstSet, FlastSet)> {
+    type PushFirstSet = Self;
+
+    fn get_first_set(&self, index: usize) -> Option<&FirstSet> {
+        self.get(self.len() - index - 1).map(|(_, first_set, _)| first_set)
+    }
+
+    fn push_first_set<F: FnOnce(&mut Self::PushFirstSet) -> R, R>(
+        &mut self,
+        nullable: bool,
+        first_set: FirstSet,
+        f: F,
+    ) -> R {
+        self.push((nullable, first_set, FlastSet::new()));
+        let res = f(self);
+        self.pop();
+        res
+    }
+}
+
 pub trait FlastSetContext: FirstSetContext {
     type PushFlastSet: FlastSetContext;
 
-    fn get_flast_set(&self, index: usize) -> Option<FlastSet>;
+    fn get_flast_set(&self, index: usize) -> Option<&FlastSet>;
 
     fn push_flast_set<F: FnOnce(&mut Self::PushFlastSet) -> R, R>(
         &mut self,
@@ -112,6 +209,27 @@ pub trait FlastSetContext: FirstSetContext {
         flast_set: FlastSet,
         f: F,
     ) -> R;
+}
+
+impl FlastSetContext for Vec<(bool, FirstSet, FlastSet)> {
+    type PushFlastSet = Self;
+
+    fn get_flast_set(&self, index: usize) -> Option<&FlastSet> {
+        self.get(self.len() - index - 1).map(|(_, _, flast_set)| flast_set)
+    }
+
+    fn push_flast_set<F: FnOnce(&mut Self::PushFlastSet) -> R, R>(
+        &mut self,
+        nullable: bool,
+        first_set: FirstSet,
+        flast_set: FlastSet,
+        f: F,
+    ) -> R {
+        self.push((nullable, first_set, flast_set));
+        let res = f(self);
+        self.pop();
+        res
+    }
 }
 
 pub trait Type {

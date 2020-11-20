@@ -390,11 +390,11 @@ impl Type for Variable {
     }
 
     fn first_set<C: FirstSetContext>(&self, context: &mut C) -> Option<FirstSet> {
-        context.get_first_set(self.index)
+        context.get_first_set(self.index).cloned()
     }
 
     fn flast_set<C: FlastSetContext>(&self, context: &mut C) -> Option<FlastSet> {
-        context.get_flast_set(self.index)
+        context.get_flast_set(self.index).cloned()
     }
 
     fn well_typed<C: FlastSetContext>(self, context: &mut C) -> Result<Typed, Self::Err> {
@@ -587,15 +587,15 @@ pub struct Typed {
 
 impl Typed {
     pub fn is_nullable(&self) -> bool {
-        todo!()
+        self.nullable
     }
 
     pub fn first_set(&self) -> &FirstSet {
-        todo!()
+        &self.first_set
     }
 
     pub fn flast_set(&self) -> &FlastSet {
-        todo!()
+        &self.flast_set
     }
 }
 
