@@ -40,6 +40,10 @@ impl Epsilon {
 impl Type for Epsilon {
     type Err = Infallible;
 
+    fn closed(&self, _depth: usize) -> Result<(), VariableError> {
+        Ok(())
+    }
+
     fn is_nullable<C: NullContext>(&self, _context: &mut C) -> Option<bool> {
         Some(true)
     }
@@ -53,7 +57,12 @@ impl Type for Epsilon {
     }
 
     fn well_typed<C: FlastSetContext>(self, _context: &mut C) -> Result<Typed, Self::Err> {
-        Ok(Typed::Epsilon)
+        Ok(Typed {
+            kind: TypeKind::Epsilon,
+            nullable: true,
+            first_set: FirstSet::new(),
+            flast_set: FlastSet::new(),
+        })
     }
 }
 
@@ -61,6 +70,10 @@ pub type Literal = LitStr;
 
 impl Type for Literal {
     type Err = Infallible;
+
+    fn closed(&self, _depth: usize) -> Result<(), VariableError> {
+        Ok(())
+    }
 
     fn is_nullable<C: NullContext>(&self, _context: &mut C) -> Option<bool> {
         Some(self.value().is_empty())
@@ -75,7 +88,15 @@ impl Type for Literal {
     }
 
     fn well_typed<C: FlastSetContext>(self, _context: &mut C) -> Result<Typed, Self::Err> {
-        Ok(Typed::Literal(self.value()))
+        let value = self.value();
+        let nullable = value.is_empty();
+        let first_set = FirstSet::of_str(&value);
+        Ok(Typed {
+            kind: TypeKind::Literal(value),
+            nullable,
+            first_set,
+            flast_set: FlastSet::new(),
+        })
     }
 }
 
@@ -98,6 +119,10 @@ impl Cat {
 
 impl Type for Cat {
     type Err = CatError;
+
+    fn closed(&self, depth: usize) -> Result<(), VariableError> {
+        self.fst.closed(depth).and_then(|()| self.snd.closed(depth))
+    }
 
     fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool> {
         Some(self.fst.is_nullable(context)? && self.snd.is_nullable(context)?)
@@ -141,7 +166,23 @@ impl Type for Cat {
         } else if !fst.flast_set().intersect_first(&snd.first_set()).is_empty() {
             Err(CatError::FirstFlastOverlap(fst, snd))
         } else {
-            Ok(Typed::Cat(Box::new(fst), Box::new(snd)))
+            // fst.is_nullable always false
+            let nullable = false;
+            let first_set = fst.first_set().clone();
+            let flast_set = if snd.is_nullable() {
+                snd.flast_set()
+                    .clone()
+                    .union_first(snd.first_set().clone())
+                    .union(fst.flast_set().clone())
+            } else {
+                snd.flast_set().clone()
+            };
+            Ok(Typed {
+                kind: TypeKind::Cat(Box::new(fst), Box::new(snd)),
+                nullable,
+                first_set,
+                flast_set,
+            })
         }
     }
 }
@@ -180,6 +221,12 @@ impl Alt {
 impl Type for Alt {
     type Err = AltError;
 
+    fn closed(&self, depth: usize) -> Result<(), VariableError> {
+        self.left
+            .closed(depth)
+            .and_then(|()| self.right.closed(depth))
+    }
+
     fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool> {
         Some(self.left.is_nullable(context)? || self.right.is_nullable(context)?)
     }
@@ -215,7 +262,15 @@ impl Type for Alt {
         } else if !left.first_set().intersect(&right.first_set()).is_empty() {
             Err(AltError::FirstOverlap(left, right))
         } else {
-            Ok(Typed::Alt(Box::new(left), Box::new(right)))
+            let nullable = false;
+            let first_set = left.first_set().clone().union(right.first_set().clone());
+            let flast_set = left.flast_set().clone().union(right.flast_set().clone());
+            Ok(Typed {
+                kind: TypeKind::Alt(Box::new(left), Box::new(right)),
+                nullable,
+                first_set,
+                flast_set,
+            })
         }
     }
 }
@@ -254,6 +309,10 @@ impl Fix {
 impl Type for Fix {
     type Err = TermError;
 
+    fn closed(&self, depth: usize) -> Result<(), VariableError> {
+        self.inner.closed(depth + 1)
+    }
+
     fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool> {
         fix(Some(false), |last| {
             last.as_ref()
@@ -284,16 +343,22 @@ impl Type for Fix {
     }
 
     fn well_typed<C: FlastSetContext>(self, context: &mut C) -> Result<Typed, Self::Err> {
-        // FIXME: free variables cause panic
+        self.inner.closed(context.get_depth() + 1)?;
+
         let nullable = self.is_nullable(context).unwrap();
         let first_set = self.first_set(context).unwrap();
         let flast_set = self.flast_set(context).unwrap();
 
         context
-            .push_flast_set(nullable, first_set, flast_set, |ctx| {
+            .push_flast_set(nullable, first_set.clone(), flast_set.clone(), |ctx| {
                 self.inner.well_typed(ctx)
             })
-            .map(|inner| Typed::Fix(Box::new(inner)))
+            .map(|inner| Typed {
+                kind: TypeKind::Fix(Box::new(inner)),
+                nullable,
+                first_set,
+                flast_set,
+            })
     }
 }
 
@@ -312,6 +377,14 @@ impl Variable {
 impl Type for Variable {
     type Err = VariableError;
 
+    fn closed(&self, depth: usize) -> Result<(), VariableError> {
+        if self.index < depth {
+            Ok(())
+        } else {
+            Err(VariableError::FreeVariable(self.clone()))
+        }
+    }
+
     fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool> {
         context.get_nullable(self.index)
     }
@@ -325,10 +398,12 @@ impl Type for Variable {
     }
 
     fn well_typed<C: FlastSetContext>(self, context: &mut C) -> Result<Typed, Self::Err> {
-        match context.get_flast_set(self.index) {
-            Some(_) => Ok(Typed::Variable(self.index)),
-            None => Err(VariableError::FreeVariable(self)),
-        }
+        self.closed(context.get_depth()).map(|()| Typed {
+            kind: TypeKind::Variable(self.index),
+            nullable: self.is_nullable(context).unwrap(),
+            first_set: self.first_set(context).unwrap(),
+            flast_set: self.flast_set(context).unwrap(),
+        })
     }
 }
 
@@ -358,6 +433,10 @@ impl Call {
 
 impl Type for Call {
     type Err = Infallible;
+
+    fn closed(&self, _depth: usize) -> Result<(), VariableError> {
+        todo!()
+    }
 
     fn is_nullable<C: NullContext>(&self, _context: &mut C) -> Option<bool> {
         todo!()
@@ -389,6 +468,18 @@ pub enum Term {
 
 impl Type for Term {
     type Err = TermError;
+
+    fn closed(&self, depth: usize) -> Result<(), VariableError> {
+        match self {
+            Self::Epsilon(e) => e.closed(depth),
+            Self::Literal(e) => e.closed(depth),
+            Self::Cat(e) => e.closed(depth),
+            Self::Alt(e) => e.closed(depth),
+            Self::Fix(e) => e.closed(depth),
+            Self::Variable(e) => e.closed(depth),
+            Self::Call(e) => e.closed(depth),
+        }
+    }
 
     fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool> {
         match self {
@@ -453,19 +544,19 @@ impl From<Infallible> for TermError {
 }
 
 impl From<CatError> for TermError {
-    fn from(other: CatError) -> Self{
+    fn from(other: CatError) -> Self {
         Self::Cat(other)
     }
 }
 
 impl From<AltError> for TermError {
-    fn from(other: AltError) -> Self{
+    fn from(other: AltError) -> Self {
         Self::Alt(other)
     }
 }
 
 impl From<VariableError> for TermError {
-    fn from(other: VariableError) -> Self{
+    fn from(other: VariableError) -> Self {
         Self::Variable(other)
     }
 }
@@ -477,15 +568,21 @@ impl Display for TermError {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Typed {
+enum TypeKind {
     Epsilon,
-    Bottom,
     Literal(String),
     Cat(Box<Typed>, Box<Typed>),
     Alt(Box<Typed>, Box<Typed>),
     Fix(Box<Typed>),
     Variable(usize),
-    Call(Ident, Vec<Typed>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Typed {
+    kind: TypeKind,
+    nullable: bool,
+    first_set: FirstSet,
+    flast_set: FlastSet,
 }
 
 impl Typed {
@@ -493,11 +590,11 @@ impl Typed {
         todo!()
     }
 
-    pub fn first_set(&self) -> FirstSet {
+    pub fn first_set(&self) -> &FirstSet {
         todo!()
     }
 
-    pub fn flast_set(&self) -> FlastSet {
+    pub fn flast_set(&self) -> &FlastSet {
         todo!()
     }
 }

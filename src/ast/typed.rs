@@ -1,4 +1,5 @@
 use super::Typed;
+use super::VariableError;
 use std::collections::BTreeSet;
 use std::fmt::Display;
 
@@ -79,6 +80,8 @@ impl FlastSet {
 pub trait NullContext {
     type PushNull: NullContext;
 
+    fn get_depth(&self) -> usize;
+
     fn get_nullable(&self, index: usize) -> Option<bool>;
 
     fn push_nullable<F: FnOnce(&mut Self::PushNull) -> R, R>(&mut self, nullable: bool, f: F) -> R;
@@ -115,15 +118,23 @@ pub trait Type {
     type Err: Display;
 
     /// # Errors
-    /// Returns [`None`] if the nullity cannot be determined.
+    /// Returns [`Err`] if there is a variable with an index greater than or equal
+    /// to `depth`.
+    fn closed(&self, depth: usize) -> Result<(), VariableError>;
+
+    /// # Errors
+    /// Returns [`None`] only if `self.closed(context.get_depth())` returns an
+    /// [`Err`].
     fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool>;
 
     /// # Errors
-    /// Returns [`None`] if the first set cannot be determined.
+    /// Returns [`None`] only if `self.closed(context.get_depth())` returns an
+    /// [`Err`].
     fn first_set<C: FirstSetContext>(&self, context: &mut C) -> Option<FirstSet>;
 
     /// # Errors
-    /// Returns [`None`] if the flast set cannot be determined.
+    /// Returns [`None`] only if `self.closed(context.get_depth())` returns an
+    /// [`Err`].
     fn flast_set<C: FlastSetContext>(&self, context: &mut C) -> Option<FlastSet>;
 
     /// # Errors
