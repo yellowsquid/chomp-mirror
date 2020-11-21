@@ -1,7 +1,14 @@
+use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::convert::Infallible;
+use std::error::Error;
 use std::fmt::Display;
 
 use proc_macro2::Span;
+use proc_macro2::TokenStream;
+use proc_macro2::TokenTree;
+use quote::format_ident;
+use quote::quote;
 use syn::{Ident, LitStr, Token};
 use typed::FirstSetContext;
 use typed::FlastSetContext;
@@ -567,7 +574,9 @@ impl Display for TermError {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl Error for TermError {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum TypeKind {
     Epsilon,
     Literal(String),
@@ -577,7 +586,60 @@ enum TypeKind {
     Variable(usize),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
+pub struct Code {
+    id: usize,
+}
+
+impl TypeKind {
+    /// Produces ident for the type and token stream for implementation
+    fn emit_code(self, context: &mut CodeContext) -> Code {
+        match self {
+            Self::Epsilon => context.epsilon(),
+            Self::Literal(s) => context.literal(s),
+            Self::Cat(fst, snd) => {
+                let Typed { kind: fst_kind, .. } = *fst;
+                let Typed { kind: snd_kind, .. } = *snd;
+                let fst_code = fst_kind.emit_code(context);
+                let snd_code = snd_kind.emit_code(context);
+                context.cat(fst_code, snd_code)
+            }
+            Self::Alt(left, right) => {
+                let Typed {
+                    kind: left_kind,
+                    nullable: left_null,
+                    first_set: left_first,
+                    ..
+                } = *left;
+                let Typed {
+                    kind: right_kind,
+                    nullable: right_null,
+                    first_set: right_first,
+                    ..
+                } = *right;
+                let left_code = left_kind.emit_code(context);
+                let right_code = right_kind.emit_code(context);
+                context.alt(
+                    left_code,
+                    left_null,
+                    left_first,
+                    right_code,
+                    right_null,
+                    right_first,
+                )
+            }
+            Self::Fix(inner) => {
+                let Typed {
+                    kind: inner_kind, ..
+                } = *inner;
+                context.fix(inner_kind)
+            }
+            Self::Variable(index) => context.variable(index),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Typed {
     kind: TypeKind,
     nullable: bool,
@@ -597,155 +659,278 @@ impl Typed {
     pub fn flast_set(&self) -> &FlastSet {
         &self.flast_set
     }
+
+    pub fn emit_code(self, name: Ident) -> TokenStream {
+        let mut context = CodeContext::new();
+        let code = self.kind.emit_code(&mut context);
+        context.all_code(name, code)
+    }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
+#[derive(Debug)]
+pub struct CodeContext {
+    data: Vec<(TokenStream, TokenStream, BTreeSet<usize>)>,
+    lit_map: HashMap<String, usize>,
+    cat_map: HashMap<(usize, usize), usize>,
+    alt_map: HashMap<(usize, usize), usize>,
+    fix_map: HashMap<TypeKind, usize>,
+    var_map: HashMap<usize, usize>, // Key is fix point ID
+    context: Vec<usize>,
+}
 
-//     #[test]
-//     fn null_epsilon() {
-//         assert!(Term::Epsilon.null(&[]));
-//     }
+impl CodeContext {
+    fn new() -> Self {
+        let eps = (quote! {()}, TokenStream::new(), BTreeSet::new());
 
-//     #[test]
-//     fn not_null_bottom() {
-//         assert!(!Term::Bottom.null(&[]));
-//     }
+        Self {
+            data: vec![eps],
+            lit_map: HashMap::new(),
+            cat_map: HashMap::new(),
+            alt_map: HashMap::new(),
+            fix_map: HashMap::new(),
+            var_map: HashMap::new(),
+            context: Vec::new(),
+        }
+    }
 
-//     #[test]
-//     fn not_null_normal_literal() {
-//         assert!(!Term::Literal("x".to_owned()).null(&[]))
-//     }
+    fn epsilon(&mut self) -> Code {
+        Code { id: 0 }
+    }
 
-//     #[test]
-//     fn null_empty_literal() {
-//         assert!(Term::Literal("".to_owned()).null(&[]))
-//     }
+    fn literal(&mut self, lit: String) -> Code {
+        if let Some(&id) = self.lit_map.get(&lit) {
+            Code { id }
+        } else {
+            let id = self.data.len();
+            let name = format_ident!("Lit{}", id);
+            let doc_name = format!(
+                r#"The literal string `"{}"`."#,
+                lit.escape_debug().collect::<String>()
+            );
+            let tokens = quote! {
+                #[doc=#doc_name]
+                pub struct #name;
 
-//     #[test]
-//     fn null_cat_both_null() {
-//         assert!(Term::Cat(Box::new(Term::Epsilon), Box::new(Term::Epsilon)).null(&[]))
-//     }
+                impl Parse for #name {
+                    fn parse<P: Parser>(input: &mut P) -> Result<Self> {
+                        input.take_str(#lit).map(|()| #name)
+                    }
+                }
+            };
 
-//     #[test]
-//     fn not_null_cat_first_not_null() {
-//         assert!(!Term::Cat(Box::new(Term::Bottom), Box::new(Term::Epsilon)).null(&[]))
-//     }
+            self.data
+                .push((TokenTree::from(name).into(), tokens, BTreeSet::new()));
+            self.lit_map.insert(lit, id);
 
-//     #[test]
-//     fn not_null_cat_second_not_null() {
-//         assert!(!Term::Cat(Box::new(Term::Epsilon), Box::new(Term::Bottom)).null(&[]))
-//     }
+            Code { id }
+        }
+    }
 
-//     #[test]
-//     fn not_null_alt_both_not_null() {
-//         assert!(!Term::Alt(Box::new(Term::Bottom), Box::new(Term::Bottom)).null(&[]))
-//     }
+    fn cat(&mut self, fst: Code, snd: Code) -> Code {
+        if let Some(&id) = self.cat_map.get(&(fst.id, snd.id)) {
+            Code { id }
+        } else {
+            let id = self.data.len();
+            let fst_ty = self.data[fst.id].0.clone();
+            let snd_ty = self.data[snd.id].0.clone();
+            self.data.push((
+                quote! {(#fst_ty, #snd_ty)},
+                TokenStream::new(),
+                [fst.id, snd.id].iter().cloned().collect(),
+            ));
+            self.cat_map.insert((fst.id, snd.id), id);
+            Code { id }
+        }
+    }
 
-//     #[test]
-//     fn null_alt_first_null() {
-//         assert!(Term::Alt(Box::new(Term::Epsilon), Box::new(Term::Bottom)).null(&[]))
-//     }
+    fn alt(
+        &mut self,
+        left_code: Code,
+        left_null: bool,
+        left_first: FirstSet,
+        right_code: Code,
+        right_null: bool,
+        right_first: FirstSet,
+    ) -> Code {
+        if let Some(&id) = self.alt_map.get(&(left_code.id, right_code.id)) {
+            Code { id }
+        } else {
+            let id = self.data.len();
+            let left_ty = self.data[left_code.id].0.clone();
+            let right_ty = self.data[right_code.id].0.clone();
+            let name = format_ident!("Alt{}", id);
+            let mut tokens = quote! {
+                pub enum #name {
+                    Left(#left_ty),
+                    Right(#right_ty),
+                }
+            };
 
-//     #[test]
-//     fn null_alt_second_null() {
-//         assert!(Term::Alt(Box::new(Term::Bottom), Box::new(Term::Epsilon)).null(&[]))
-//     }
+            let other = if left_null {
+                let iter = right_first.into_iter();
 
-//     #[test]
-//     fn not_null_fix_simple_inner() {
-//         assert!(!Term::Fix(Box::new(Term::Bottom)).null(&[]))
-//     }
+                quote! {
+                    impl Parse for #name {
+                        fn parse<P: Parser>(input: &mut P) -> Result<Self> {
+                            match input.peek() {
+                                #(Some(#iter))|* => input.parse().map(Self::Right),
+                                _ => input.parse().map(Self::Left),
+                            }
+                        }
+                    }
+                }
+            } else if right_null {
+                let iter = left_first.into_iter();
 
-//     #[test]
-//     fn null_fix_simple_inner() {
-//         assert!(Term::Fix(Box::new(Term::Epsilon)).null(&[]))
-//     }
+                quote! {
+                    impl Parse for #name {
+                        fn parse<P: Parser>(input: &mut P) -> Result<Self> {
+                            match input.peek() {
+                                #(Some(#iter))|* => input.parse().map(Self::Left),
+                                _ => input.parse().map(Self::Right),
+                            }
+                        }
+                    }
+                }
+            } else {
+                let iter_first = left_first.clone().union(right_first.clone()).into_iter();
+                let iter_left = left_first.into_iter();
+                let iter_right = right_first.into_iter();
 
-//     #[test]
-//     fn not_null_fix_var_inner() {
-//         assert!(!Term::Fix(Box::new(Term::Variable(0))).null(&[]))
-//     }
+                quote! {
+                    impl Parse for #name {
+                        fn parse<P: Parser>(input: &mut P) -> Result<Self> {
+                            match input.peek().ok_or(Error::EndOfStream)? {
+                                #(#iter_left)|* => input.parse().map(Self::Left),
+                                #(#iter_right)|* => input.parse().map(Self::Right),
+                                c => input.error(Error::BadBranch(c, &[#(#iter_first),*]))
+                            }
+                        }
+                    }
+                }
+            };
 
-//     #[test]
-//     fn null_fix_var_inner() {
-//         assert!(Term::Fix(Box::new(Term::Alt(
-//             Box::new(Term::Epsilon),
-//             Box::new(Term::Variable(0))
-//         )))
-//         .null(&[]))
-//     }
+            tokens.extend(other);
+            self.data.push((
+                TokenTree::from(name).into(),
+                tokens,
+                [left_code.id, right_code.id].iter().cloned().collect(),
+            ));
+            self.alt_map.insert((left_code.id, right_code.id), id);
+            Code { id }
+        }
+    }
 
-//     #[test]
-//     fn first_epsilon_empty() {
-//         assert_eq!(Term::Epsilon.first(&[]), BTreeSet::new())
-//     }
+    fn fix(&mut self, inner: TypeKind) -> Code {
+        if let Some(&id) = self.fix_map.get(&inner) {
+            Code { id }
+        } else {
+            let id = self.data.len();
+            let name = format_ident!("Fix{}", id);
+            self.data.push((
+                TokenTree::from(name.clone()).into(),
+                TokenStream::new(),
+                BTreeSet::new(),
+            ));
+            self.context.push(id);
+            let inner = inner.emit_code(self).id;
+            let inner_ty = self.data[inner].0.clone();
+            let tokens = quote! {
+                pub struct #name(#inner_ty);
 
-//     #[test]
-//     fn first_bottom_empty() {
-//         assert_eq!(Term::Bottom.first(&[]), BTreeSet::new())
-//     }
+                impl Parse for #name {
+                    fn parse<P: Parser>(input: &mut P) -> Result<Self> {
+                        input.parse().map(Self)
+                    }
+                }
+            };
+            self.data[id].1 = tokens;
+            self.data[id].2 = [inner].iter().cloned().collect();
+            Code { id }
+        }
+    }
 
-//     #[test]
-//     fn first_literal_first_char() {
-//         let set = vec!['x'].into_iter().collect();
-//         assert_eq!(Term::Literal("x".to_owned()).first(&[]), set);
-//         let set = vec!['h'].into_iter().collect();
-//         assert_eq!(Term::Literal("hello".to_owned()).first(&[]), set);
-//         assert_eq!(Term::Literal("".to_owned()).first(&[]), BTreeSet::new());
-//     }
+    fn variable(&mut self, index: usize) -> Code {
+        let fix_id = self.context[self.context.len() - index - 1];
+        if let Some(&id) = self.var_map.get(&fix_id) {
+            Code { id }
+        } else {
+            let id = self.data.len();
+            let fix_ty = self.data[fix_id].0.clone();
+            let name = quote! {Box<#fix_ty>};
+            self.data.push((name, TokenStream::new(), BTreeSet::new()));
+            self.var_map.insert(fix_id, id);
+            Code { id }
+        }
+    }
 
-//     #[test]
-//     fn first_cat_first_not_null() {
-//         let set = vec!['x'].into_iter().collect();
-//         assert_eq!(
-//             Term::Cat(
-//                 Box::new(Term::Literal("x".to_owned())),
-//                 Box::new(Term::Literal("y".to_owned()))
-//             )
-//             .first(&[]),
-//             set
-//         );
-//     }
+    pub fn all_code(&mut self, name: Ident, code: Code) -> TokenStream {
+        let root = self.data[code.id].clone();
+        let mut tokens = root.1;
+        let mut completed = [code.id].iter().cloned().collect::<BTreeSet<_>>();
+        let mut todo = root.2;
 
-//     #[test]
-//     fn first_cat_first_null() {
-//         let set = vec!['x', 'y'].into_iter().collect();
-//         assert_eq!(
-//             Term::Cat(
-//                 Box::new(Term::Alt(
-//                     Box::new(Term::Epsilon),
-//                     Box::new(Term::Literal("x".to_owned()))
-//                 )),
-//                 Box::new(Term::Literal("y".to_owned()))
-//             )
-//             .first(&[]),
-//             set
-//         );
-//     }
+        while !todo.is_empty() {
+            let mut next = BTreeSet::new();
+            completed.extend(todo.clone());
 
-//     // TODO: test flast
+            for ty in todo {
+                let ty = self.data[ty].clone();
+                tokens.extend(ty.1);
+                next.extend(ty.2.into_iter().filter(|id| !completed.contains(id)));
+            }
 
-//     #[test]
-//     fn types_epsilon() {
-//         assert_eq!(Term::Epsilon.type_check(&[]), Ok(Typed::Epsilon))
-//     }
+            todo = next;
+        }
 
-//     #[test]
-//     fn types_bottom() {
-//         assert_eq!(Term::Bottom.type_check(&[]), Ok(Typed::Bottom))
-//     }
+        let root_ty = root.0;
+        tokens.extend(quote! {
+            pub type #name = #root_ty;
 
-//     #[test]
-//     fn types_literal() {
-//         assert_eq!(
-//             Term::Literal("x".to_owned()).type_check(&[]),
-//             Ok(Typed::Literal("x".to_owned()))
-//         );
-//         assert_eq!(
-//             Term::Literal("".to_owned()).type_check(&[]),
-//             Ok(Typed::Literal("".to_owned()))
-//         )
-//     }
-// }
+            pub enum Error {
+                BadBranch(char, &'static [char]),
+                EndOfStream,
+            }
+
+            pub type Result<T> = std::result::Result<T, Error>;
+
+            pub trait Parser: Iterator<Item = char> {
+                fn peek(&mut self) -> Option<char>;
+
+                fn parse<T: Parse>(&mut self) -> Result<T> where Self: Sized {
+                    T::parse(self)
+                }
+
+                fn take_str(&mut self, s: &str) -> Result<()>;
+
+                fn error<T>(&mut self, e: Error) -> Result<T>;
+            }
+
+            pub trait Parse: Sized {
+                fn parse<P: Parser>(input: &mut P) -> Result<Self>;
+            }
+
+            impl Parse for () {
+                fn parse<P: Parser>(_input: &mut P) -> Result<Self> {
+                    Ok(())
+                }
+            }
+
+            impl<A: Parse, B: Parse> Parse for (A, B) {
+                fn parse<P: Parser>(input: &mut P) -> Result<Self> {
+                    let a = input.parse()?;
+                    let b = input.parse()?;
+                    Ok((a, b))
+                }
+            }
+
+            impl<T: Parse + Sized> Parse for Box<T> {
+                fn parse<P: Parser>(input: &mut P) -> Result<Self> {
+                    input.parse().map(Box::new)
+                }
+            }
+        });
+
+        tokens
+    }
+}

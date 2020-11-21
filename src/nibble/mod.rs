@@ -280,7 +280,7 @@ impl Convert for Alt {
     }
 }
 
-type Expression = Alt;
+pub type Expression = Alt;
 
 #[cfg(test)]
 mod tests {

@@ -3,7 +3,7 @@ use super::VariableError;
 use std::collections::BTreeSet;
 use std::fmt::Display;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FirstSet {
     inner: BTreeSet<char>,
 }
@@ -36,9 +36,13 @@ impl FirstSet {
             inner: self.inner.intersection(&other.inner).copied().collect(),
         }
     }
+
+    pub fn into_iter(self) -> impl Iterator<Item = char> {
+        self.inner.into_iter()
+    }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FlastSet {
     inner: BTreeSet<char>,
 }
