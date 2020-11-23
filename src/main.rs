@@ -19,15 +19,13 @@ fn main() {
         .read_to_string(&mut input)
         .map_err(|e| Box::new(e) as Box<dyn Error>)
         .and_then(|_| syn::parse_str(&input).map_err(|e| Box::new(e) as Box<dyn Error>))
-        .map(|nibble: Expression| {
+        .and_then(|nibble: Expression| {
             nibble
                 .convert(&Context::new())
                 .well_typed(&mut FlastContext::new())
+                .map_err(|e| Box::new(e) as Box<dyn Error>)
         })
-        .map(|res| match res {
-            Ok((typed, _)) => typed.emit_code(Ident::new("Ast", Span::call_site())),
-            Err(e) => syn::Error::from(e).to_compile_error(),
-        })
+        .map(|(typed, _)| typed.emit_code(Ident::new("Ast", Span::call_site())))
         .and_then(|code| {
             write!(io::stdout(), "{:#}", code).map_err(|e| Box::new(e) as Box<dyn Error>)
         });

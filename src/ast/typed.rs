@@ -3,7 +3,6 @@ use proc_macro2::Span;
 use super::Typed;
 use super::VariableError;
 use std::collections::BTreeSet;
-use std::fmt::Display;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FirstSet {

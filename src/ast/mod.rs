@@ -2,6 +2,8 @@ use self::typed::{FirstContext, FirstSet, FlastContext, FlastSet, NullContext, T
 use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::{format_ident, quote};
 use std::collections::{BTreeSet, HashMap};
+use std::error::Error;
+use std::fmt::{self, Display};
 use syn::{Ident, LitStr, Token};
 
 pub mod convert;
@@ -160,13 +162,13 @@ impl Type for Cat {
     }
 
     fn well_typed(self, context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
-        let (fst, fst_span) = self
-            .fst
+        let fst = self.fst;
+        let snd = self.snd;
+        let (fst, fst_span) = fst
             .well_typed(context)
             .map_err(|e| CatError::First(Box::new(e)))?;
-        let (snd, snd_span) = self
-            .snd
-            .well_typed(context)
+        let (snd, snd_span) = context
+            .unguard(|ctx| snd.well_typed(ctx))
             .map_err(|e| CatError::Second(Box::new(e)))?;
 
         if fst.is_nullable() {
@@ -176,7 +178,13 @@ impl Type for Cat {
                 fst,
             })
         } else if !fst.flast_set().intersect_first(&snd.first_set()).is_empty() {
-            Err(CatError::FirstFlastOverlap(fst, snd))
+            Err(CatError::FirstFlastOverlap {
+                punct: self.punct.span,
+                fst_span,
+                fst,
+                snd_span,
+                snd,
+            })
         } else {
             // fst.is_nullable always false
             let nullable = false;
@@ -211,7 +219,13 @@ pub enum CatError {
         fst_span: Span,
         fst: Typed,
     },
-    FirstFlastOverlap(Typed, Typed),
+    FirstFlastOverlap {
+        punct: Span,
+        fst_span: Span,
+        fst: Typed,
+        snd_span: Span,
+        snd: Typed,
+    },
 }
 
 impl From<CatError> for syn::Error {
@@ -222,16 +236,49 @@ impl From<CatError> for syn::Error {
             CatError::FirstNullable {
                 punct, fst_span, ..
             } => {
-                let mut err = Self::new(punct, "first item in sequence cannot accept empty string");
+                let mut err = Self::new(
+                    punct,
+                    "first item in sequence cannot accept the empty string",
+                );
                 err.combine(Self::new(fst_span, "this can accept empty string"));
                 err
             }
-            CatError::FirstFlastOverlap(fst, snd) => {
-                todo!()
+            CatError::FirstFlastOverlap {
+                punct,
+                fst_span,
+                snd_span,
+                ..
+            } => {
+                let mut err = Self::new(
+                    punct,
+                    "cannot decide whether to repeat first or start accepting second",
+                );
+                err.combine(Self::new(fst_span, "a repetition of this"));
+                err.combine(Self::new(snd_span, "collides with the start of this"));
+                err
             }
         }
     }
 }
+
+impl Display for CatError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::First(inner) => inner.fmt(f),
+            Self::Second(inner) => inner.fmt(f),
+            Self::FirstNullable { fst, .. } => {
+                write!(f, "term '{}' accepts the empty string", fst)
+            }
+            Self::FirstFlastOverlap { fst, snd, .. } => write!(
+                f,
+                "cannot decide whether to repeat '{}' or start accepting '{}'.",
+                fst, snd
+            ),
+        }
+    }
+}
+
+impl Error for CatError {}
 
 #[derive(Clone, Debug)]
 pub struct Alt {
@@ -290,9 +337,21 @@ impl Type for Alt {
             .map_err(|e| AltError::Right(Box::new(e)))?;
 
         if left.is_nullable() && right.is_nullable() {
-            Err(AltError::BothNullable(left, right))
+            Err(AltError::BothNullable {
+                punct: self.punct.span,
+                left_span,
+                left,
+                right_span,
+                right
+            })
         } else if !left.first_set().intersect(&right.first_set()).is_empty() {
-            Err(AltError::FirstOverlap(left, right))
+            Err(AltError::FirstOverlap {
+                punct: self.punct.span,
+                left_span,
+                left,
+                right_span,
+                right
+            })
         } else {
             let nullable = false;
             let first_set = left.first_set().clone().union(right.first_set().clone());
@@ -314,15 +373,63 @@ impl Type for Alt {
 pub enum AltError {
     Left(Box<TermError>),
     Right(Box<TermError>),
-    BothNullable(Typed, Typed),
-    FirstOverlap(Typed, Typed),
+    BothNullable {
+        punct: Span,
+        left_span: Span,
+        left: Typed,
+        right_span: Span,
+        right: Typed,
+    },
+    FirstOverlap {
+        punct: Span,
+        left_span: Span,
+        left: Typed,
+        right_span: Span,
+        right: Typed,
+    },
 }
 
 impl From<AltError> for syn::Error {
     fn from(other: AltError) -> Self {
-        todo!()
+        match other {
+            AltError::Left(inner) => (*inner).into(),
+            AltError::Right(inner) => (*inner).into(),
+            AltError::BothNullable {
+                punct, left_span, right_span, ..
+            } => {
+                let mut err = Self::new(punct, "both branches accept the empty string");
+                err.combine(Self::new(left_span, "left branch accepts the empty string"));
+                err.combine(Self::new(right_span, "right branch accepts the empty string"));
+                err
+            }
+            AltError::FirstOverlap {
+                punct, left_span, right_span, ..
+            } => {
+                let mut err = Self::new(punct, "cannot decide whether to accept the left or right branch");
+                err.combine(Self::new(left_span, "left branch starts with a character"));
+                err.combine(Self::new(right_span, "right branch starts with the same character"));
+                err
+            }
+        }
     }
 }
+
+impl Display for AltError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Left(inner) => inner.fmt(f),
+            Self::Right(inner) => inner.fmt(f),
+            Self::BothNullable {
+                left, right, ..
+            } => write!(f, "both '{}' and '{}' accept the empty string.", left, right),
+            Self::FirstOverlap {
+                left, right, ..
+            } => write!(f, "cannot decide whether to accept '{}' or '{}'.", left, right),
+        }
+    }
+}
+
+impl Error for AltError {}
 
 #[derive(Clone, Debug)]
 pub struct Fix {
@@ -469,10 +576,24 @@ pub enum VariableError {
 }
 
 impl From<VariableError> for syn::Error {
-    fn from(_: VariableError) -> Self {
-        todo!()
+    fn from(other: VariableError) -> Self {
+        match other {
+            VariableError::FreeVariable(_) => todo!(),
+            VariableError::GuardedVariable(_) => todo!(),
+        }
     }
 }
+
+impl Display for VariableError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FreeVariable(var) => write!(f, "unbound variable '{}'", var.name),
+            Self::GuardedVariable(var) => write!(f, "variable '{}' is guarded", var.name),
+        }
+    }
+}
+
+impl Error for VariableError {}
 
 #[derive(Clone, Debug)]
 pub struct Call {
@@ -627,6 +748,18 @@ impl From<TermError> for syn::Error {
     }
 }
 
+impl Display for TermError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cat(e) => e.fmt(f),
+            Self::Alt(e) => e.fmt(f),
+            Self::Variable(e) => e.fmt(f),
+        }
+    }
+}
+
+impl Error for TermError {}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum TypeKind {
     Epsilon,
@@ -690,6 +823,19 @@ impl TypeKind {
     }
 }
 
+impl Display for TypeKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Epsilon => write!(f, "()"),
+            Self::Literal(s) => write!(f, "{:?}", s),
+            Self::Cat(fst, snd) => write!(f, "{}.{}", fst, snd),
+            Self::Alt(left, right) => write!(f, "({} | {})", left, right),
+            Self::Fix(inner) => write!(f, "[]({})", inner),
+            Self::Variable(index) => write!(f, "{}", index),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Typed {
     kind: TypeKind,
@@ -715,6 +861,12 @@ impl Typed {
         let mut context = CodeContext::new();
         let code = self.kind.emit_code(&mut context);
         context.all_code(name, code)
+    }
+}
+
+impl Display for Typed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.kind.fmt(f)
     }
 }
 
