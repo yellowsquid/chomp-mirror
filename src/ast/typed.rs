@@ -1,3 +1,5 @@
+use proc_macro2::Span;
+
 use super::Typed;
 use super::VariableError;
 use std::collections::BTreeSet;
@@ -36,8 +38,14 @@ impl FirstSet {
             inner: self.inner.intersection(&other.inner).copied().collect(),
         }
     }
+}
 
-    pub fn into_iter(self) -> impl Iterator<Item = char> {
+impl IntoIterator for FirstSet {
+    type Item = char;
+
+    type IntoIter = <BTreeSet<char> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
         self.inner.into_iter()
     }
 }
@@ -81,163 +89,183 @@ impl FlastSet {
     }
 }
 
-pub trait NullContext {
-    type PushNull: NullContext;
-
-    fn get_depth(&self) -> usize;
-
-    fn get_nullable(&self, index: usize) -> Option<bool>;
-
-    fn push_nullable<F: FnOnce(&mut Self::PushNull) -> R, R>(&mut self, nullable: bool, f: F) -> R;
+#[derive(Debug)]
+pub struct NullContext<'a> {
+    inner: &'a mut FlastContext
 }
 
-impl NullContext for Vec<bool> {
-    type PushNull = Self;
-
-    fn get_depth(&self) -> usize {
-        self.len()
+impl NullContext<'_> {
+    pub fn depth(&self) -> usize {
+        self.inner.depth()
     }
 
-    fn get_nullable(&self, index: usize) -> Option<bool> {
-        self.get(self.len() - index - 1).copied()
+    pub fn is_guarded(&self, index: usize) -> Option<bool> {
+        self.inner.is_guarded(index)
     }
 
-    fn push_nullable<F: FnOnce(&mut Self::PushNull) -> R, R>(&mut self, nullable: bool, f: F) -> R {
-        self.push(nullable);
-        let res = f(self);
-        self.pop();
-        res
-    }
-}
-
-impl NullContext for Vec<(bool, FirstSet)> {
-    type PushNull = Self;
-
-    fn get_depth(&self) -> usize {
-        self.len()
+    pub fn unguard<F: FnOnce(&mut NullContext<'_>) -> R, R>(&mut self, f: F) -> R {
+        self.inner.unguard(|ctx| f(&mut NullContext {inner: ctx}))
     }
 
-    fn get_nullable(&self, index: usize) -> Option<bool> {
-        self.get(self.len() - index - 1).map(|(null, _)| null).copied()
+    pub fn is_nullable(&self, index: usize) -> Option<bool> {
+        self.inner.is_nullable(index)
     }
 
-    fn push_nullable<F: FnOnce(&mut Self::PushNull) -> R, R>(&mut self, nullable: bool, f: F) -> R {
-        self.push((nullable, FirstSet::new()));
-        let res = f(self);
-        self.pop();
-        res
-    }
-}
-
-impl NullContext for Vec<(bool, FirstSet, FlastSet)> {
-    type PushNull = Self;
-
-    fn get_depth(&self) -> usize {
-        self.len()
-    }
-
-    fn get_nullable(&self, index: usize) -> Option<bool> {
-        self.get(self.len() - index - 1).map(|(null, _, _)| null).copied()
-    }
-
-    fn push_nullable<F: FnOnce(&mut Self::PushNull) -> R, R>(&mut self, nullable: bool, f: F) -> R {
-        self.push((nullable, FirstSet::new(), FlastSet::new()));
-        let res = f(self);
-        self.pop();
-        res
-    }
-}
-
-pub trait FirstSetContext: NullContext {
-    type PushFirstSet: FirstSetContext;
-
-    fn get_first_set(&self, index: usize) -> Option<&FirstSet>;
-
-    fn push_first_set<F: FnOnce(&mut Self::PushFirstSet) -> R, R>(
+    pub fn push_nullable<F: FnOnce(&mut NullContext<'_>) -> R, R>(
         &mut self,
         nullable: bool,
-        first_set: FirstSet,
         f: F,
-    ) -> R;
+    ) -> R {
+        self.inner.push_nullable(nullable, f)
+    }
 }
 
-impl FirstSetContext for Vec<(bool, FirstSet)> {
-    type PushFirstSet = Self;
+#[derive(Debug)]
+pub struct FirstContext<'a> {
+    inner: &'a mut FlastContext,
+}
 
-    fn get_first_set(&self, index: usize) -> Option<&FirstSet> {
-        self.get(self.len() - index - 1).map(|(_, first_set)| first_set)
+impl FirstContext<'_> {
+    pub fn depth(&self) -> usize {
+        self.inner.depth()
     }
 
-    fn push_first_set<F: FnOnce(&mut Self::PushFirstSet) -> R, R>(
+    pub fn is_guarded(&self, index: usize) -> Option<bool> {
+        self.inner.is_guarded(index)
+    }
+
+    pub fn unguard<F: FnOnce(&mut FirstContext<'_>) -> R, R>(&mut self, f: F) -> R {
+        self.inner.unguard(|ctx| {
+            f(&mut FirstContext{inner: ctx})
+        })
+    }
+
+    pub fn is_nullable(&self, index: usize) -> Option<bool> {
+        self.inner.is_nullable(index)
+    }
+
+    pub fn push_nullable<F: FnOnce(&mut NullContext<'_>) -> R, R>(
+        &mut self,
+        nullable: bool,
+        f: F,
+    ) -> R {
+        self.inner.push_nullable(nullable, f)
+    }
+
+    pub fn first_set(&self, index: usize) -> Option<&FirstSet> {
+        self.inner.first_set(index)
+    }
+
+    pub fn push_first_set<F: FnOnce(&mut FirstContext<'_>) -> R, R>(
         &mut self,
         nullable: bool,
         first_set: FirstSet,
         f: F,
     ) -> R {
-        self.push((nullable, first_set));
-        let res = f(self);
-        self.pop();
-        res
+        self.inner.push_first_set(nullable, first_set, f)
+    }
+
+    pub fn as_null(&mut self) -> NullContext<'_> {
+        NullContext {
+           inner: self.inner
+        }
     }
 }
 
-impl FirstSetContext for Vec<(bool, FirstSet, FlastSet)> {
-    type PushFirstSet = Self;
+#[derive(Debug)]
+pub struct FlastContext {
+    data: Vec<(bool, FirstSet, FlastSet)>,
+    guard: Vec<usize>,
+}
 
-    fn get_first_set(&self, index: usize) -> Option<&FirstSet> {
-        self.get(self.len() - index - 1).map(|(_, first_set, _)| first_set)
+impl FlastContext {
+    pub fn new() -> Self {
+        Self {
+            data: Vec::new(),
+            guard: Vec::new(),
+        }
     }
 
-    fn push_first_set<F: FnOnce(&mut Self::PushFirstSet) -> R, R>(
+    pub fn depth(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn is_guarded(&self, index: usize) -> Option<bool> {
+        if self.data.len() <= index {
+            None
+        } else if self.guard.is_empty() {
+            Some(false)
+        } else {
+            Some(self.guard[self.guard.len() - 1] + index >= self.data.len())
+        }
+    }
+
+    pub fn unguard<F: FnOnce(&mut Self) -> R, R>(&mut self, f: F) -> R {
+        self.guard.push(self.data.len());
+        let res = f(self);
+        self.guard.pop();
+        res
+    }
+
+    pub fn is_nullable(&self, index: usize) -> Option<bool> {
+        self.data.get(index).map(|(null, _, _)| *null)
+    }
+
+    pub fn push_nullable<F: FnOnce(&mut NullContext<'_>) -> R, R>(
+        &mut self,
+        nullable: bool,
+        f: F,
+    ) -> R {
+        self.push_first_set(nullable, FirstSet::new(), |ctx| {
+            f(&mut ctx.as_null())
+        })
+    }
+
+    pub fn first_set(&self, index: usize) -> Option<&FirstSet> {
+        self.data.get(index).map(|(_, first, _)| first)
+    }
+
+    pub fn push_first_set<F: FnOnce(&mut FirstContext<'_>) -> R, R>(
         &mut self,
         nullable: bool,
         first_set: FirstSet,
         f: F,
     ) -> R {
-        self.push((nullable, first_set, FlastSet::new()));
-        let res = f(self);
-        self.pop();
-        res
+        self.push_flast_set(nullable, first_set, FlastSet::new(), |ctx| f(&mut ctx.as_first()))
     }
-}
 
-pub trait FlastSetContext: FirstSetContext {
-    type PushFlastSet: FlastSetContext;
+    pub fn flast_set(&self, index: usize) -> Option<&FlastSet> {
+        self.data.get(index).map(|(_, _, flast)| flast)
+    }
 
-    fn get_flast_set(&self, index: usize) -> Option<&FlastSet>;
-
-    fn push_flast_set<F: FnOnce(&mut Self::PushFlastSet) -> R, R>(
+    pub fn push_flast_set<F: FnOnce(&mut Self) -> R, R>(
         &mut self,
         nullable: bool,
         first_set: FirstSet,
         flast_set: FlastSet,
         f: F,
-    ) -> R;
-}
-
-impl FlastSetContext for Vec<(bool, FirstSet, FlastSet)> {
-    type PushFlastSet = Self;
-
-    fn get_flast_set(&self, index: usize) -> Option<&FlastSet> {
-        self.get(self.len() - index - 1).map(|(_, _, flast_set)| flast_set)
+    ) -> R {
+        self.data.push((nullable, first_set, flast_set));
+        let res = f(self);
+        self.data.pop();
+        res
     }
 
-    fn push_flast_set<F: FnOnce(&mut Self::PushFlastSet) -> R, R>(
-        &mut self,
-        nullable: bool,
-        first_set: FirstSet,
-        flast_set: FlastSet,
-        f: F,
-    ) -> R {
-        self.push((nullable, first_set, flast_set));
-        let res = f(self);
-        self.pop();
-        res
+    pub fn as_first(&mut self) -> FirstContext<'_> {
+        FirstContext {
+            inner: self
+        }
+    }
+
+    pub fn as_null(&mut self) -> NullContext<'_> {
+        NullContext{
+            inner: self
+        }
     }
 }
 
 pub trait Type {
-    type Err: Display;
+    type Err: Into<syn::Error>;
 
     /// # Errors
     /// Returns [`Err`] if there is a variable with an index greater than or equal
@@ -247,19 +275,19 @@ pub trait Type {
     /// # Errors
     /// Returns [`None`] only if `self.closed(context.get_depth())` returns an
     /// [`Err`].
-    fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool>;
+    fn is_nullable(&self, context: &mut NullContext<'_>) -> Option<bool>;
 
     /// # Errors
     /// Returns [`None`] only if `self.closed(context.get_depth())` returns an
     /// [`Err`].
-    fn first_set<C: FirstSetContext>(&self, context: &mut C) -> Option<FirstSet>;
+    fn first_set(&self, context: &mut FirstContext<'_>) -> Option<FirstSet>;
 
     /// # Errors
     /// Returns [`None`] only if `self.closed(context.get_depth())` returns an
     /// [`Err`].
-    fn flast_set<C: FlastSetContext>(&self, context: &mut C) -> Option<FlastSet>;
+    fn flast_set(&self, context: &mut FlastContext) -> Option<FlastSet>;
 
     /// # Errors
     /// Returns an [`Err`] if this term is not well typed.
-    fn well_typed<C: FlastSetContext>(self, context: &mut C) -> Result<Typed, Self::Err>;
+    fn well_typed(self, context: &mut FlastContext) -> Result<(Typed, Span), Self::Err>;
 }

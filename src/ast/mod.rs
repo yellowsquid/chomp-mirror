@@ -1,25 +1,20 @@
-use std::collections::BTreeSet;
-use std::collections::HashMap;
-use std::convert::Infallible;
-use std::error::Error;
-use std::fmt::Display;
-
-use proc_macro2::Span;
-use proc_macro2::TokenStream;
-use proc_macro2::TokenTree;
-use quote::format_ident;
-use quote::quote;
+use self::typed::{FirstContext, FirstSet, FlastContext, FlastSet, NullContext, Type};
+use proc_macro2::{Span, TokenStream, TokenTree};
+use quote::{format_ident, quote};
+use std::collections::{BTreeSet, HashMap};
 use syn::{Ident, LitStr, Token};
-use typed::FirstSetContext;
-use typed::FlastSetContext;
-use typed::NullContext;
-
-use self::typed::FirstSet;
-use self::typed::FlastSet;
-use self::typed::Type;
 
 pub mod convert;
 pub mod typed;
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum Never {}
+
+impl From<Never> for syn::Error {
+    fn from(other: Never) -> Self {
+        match other {}
+    }
+}
 
 fn fix<R: PartialEq, F: FnMut(&R) -> R>(init: R, mut step: F) -> R {
     let mut res = init;
@@ -45,65 +40,71 @@ impl Epsilon {
 }
 
 impl Type for Epsilon {
-    type Err = Infallible;
+    type Err = Never;
 
     fn closed(&self, _depth: usize) -> Result<(), VariableError> {
         Ok(())
     }
 
-    fn is_nullable<C: NullContext>(&self, _context: &mut C) -> Option<bool> {
+    fn is_nullable(&self, _context: &mut NullContext<'_>) -> Option<bool> {
         Some(true)
     }
 
-    fn first_set<C: FirstSetContext>(&self, _context: &mut C) -> Option<FirstSet> {
+    fn first_set(&self, _context: &mut FirstContext<'_>) -> Option<FirstSet> {
         Some(FirstSet::new())
     }
 
-    fn flast_set<C: FlastSetContext>(&self, _context: &mut C) -> Option<FlastSet> {
+    fn flast_set(&self, _context: &mut FlastContext) -> Option<FlastSet> {
         Some(FlastSet::new())
     }
 
-    fn well_typed<C: FlastSetContext>(self, _context: &mut C) -> Result<Typed, Self::Err> {
-        Ok(Typed {
-            kind: TypeKind::Epsilon,
-            nullable: true,
-            first_set: FirstSet::new(),
-            flast_set: FlastSet::new(),
-        })
+    fn well_typed(self, _context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
+        Ok((
+            Typed {
+                kind: TypeKind::Epsilon,
+                nullable: true,
+                first_set: FirstSet::new(),
+                flast_set: FlastSet::new(),
+            },
+            self.span,
+        ))
     }
 }
 
 pub type Literal = LitStr;
 
 impl Type for Literal {
-    type Err = Infallible;
+    type Err = Never;
 
     fn closed(&self, _depth: usize) -> Result<(), VariableError> {
         Ok(())
     }
 
-    fn is_nullable<C: NullContext>(&self, _context: &mut C) -> Option<bool> {
+    fn is_nullable(&self, _context: &mut NullContext<'_>) -> Option<bool> {
         Some(self.value().is_empty())
     }
 
-    fn first_set<C: FirstSetContext>(&self, _context: &mut C) -> Option<FirstSet> {
+    fn first_set(&self, _context: &mut FirstContext<'_>) -> Option<FirstSet> {
         Some(FirstSet::of_str(&self.value()))
     }
 
-    fn flast_set<C: FlastSetContext>(&self, _context: &mut C) -> Option<FlastSet> {
+    fn flast_set(&self, _context: &mut FlastContext) -> Option<FlastSet> {
         Some(FlastSet::new())
     }
 
-    fn well_typed<C: FlastSetContext>(self, _context: &mut C) -> Result<Typed, Self::Err> {
+    fn well_typed(self, _context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
         let value = self.value();
         let nullable = value.is_empty();
         let first_set = FirstSet::of_str(&value);
-        Ok(Typed {
-            kind: TypeKind::Literal(value),
-            nullable,
-            first_set,
-            flast_set: FlastSet::new(),
-        })
+        Ok((
+            Typed {
+                kind: TypeKind::Literal(value),
+                nullable,
+                first_set,
+                flast_set: FlastSet::new(),
+            },
+            self.span(),
+        ))
     }
 }
 
@@ -131,26 +132,26 @@ impl Type for Cat {
         self.fst.closed(depth).and_then(|()| self.snd.closed(depth))
     }
 
-    fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool> {
-        Some(self.fst.is_nullable(context)? && self.snd.is_nullable(context)?)
+    fn is_nullable(&self, context: &mut NullContext<'_>) -> Option<bool> {
+        Some(self.fst.is_nullable(context)? && context.unguard(|ctx| self.snd.is_nullable(ctx))?)
     }
 
-    fn first_set<C: FirstSetContext>(&self, context: &mut C) -> Option<FirstSet> {
+    fn first_set(&self, context: &mut FirstContext<'_>) -> Option<FirstSet> {
         let set = self.fst.first_set(context)?;
 
-        if self.fst.is_nullable(context)? {
-            Some(set.union(self.snd.first_set(context)?))
+        if self.fst.is_nullable(&mut context.as_null())? {
+            Some(set.union(context.unguard(|ctx| self.snd.first_set(ctx))?))
         } else {
             Some(set)
         }
     }
 
-    fn flast_set<C: FlastSetContext>(&self, context: &mut C) -> Option<FlastSet> {
-        let set = self.snd.flast_set(context)?;
+    fn flast_set(&self, context: &mut FlastContext) -> Option<FlastSet> {
+        let set = context.unguard(|ctx| self.snd.flast_set(ctx))?;
 
-        if self.snd.is_nullable(context)? {
+        if context.as_null().unguard(|ctx| self.snd.is_nullable(ctx))? {
             Some(
-                set.union_first(self.snd.first_set(context)?)
+                set.union_first(context.as_first().unguard(|ctx| self.snd.first_set(ctx))?)
                     .union(self.fst.flast_set(context)?),
             )
         } else {
@@ -158,18 +159,22 @@ impl Type for Cat {
         }
     }
 
-    fn well_typed<C: FlastSetContext>(self, context: &mut C) -> Result<Typed, Self::Err> {
-        let fst = self
+    fn well_typed(self, context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
+        let (fst, fst_span) = self
             .fst
             .well_typed(context)
             .map_err(|e| CatError::First(Box::new(e)))?;
-        let snd = self
+        let (snd, snd_span) = self
             .snd
             .well_typed(context)
             .map_err(|e| CatError::Second(Box::new(e)))?;
 
         if fst.is_nullable() {
-            Err(CatError::FirstNullable(fst))
+            Err(CatError::FirstNullable {
+                punct: self.punct.span,
+                fst_span,
+                fst,
+            })
         } else if !fst.flast_set().intersect_first(&snd.first_set()).is_empty() {
             Err(CatError::FirstFlastOverlap(fst, snd))
         } else {
@@ -184,12 +189,15 @@ impl Type for Cat {
             } else {
                 snd.flast_set().clone()
             };
-            Ok(Typed {
-                kind: TypeKind::Cat(Box::new(fst), Box::new(snd)),
-                nullable,
-                first_set,
-                flast_set,
-            })
+            Ok((
+                Typed {
+                    kind: TypeKind::Cat(Box::new(fst), Box::new(snd)),
+                    nullable,
+                    first_set,
+                    flast_set,
+                },
+                fst_span.join(snd_span).unwrap_or_else(Span::call_site),
+            ))
         }
     }
 }
@@ -198,13 +206,30 @@ impl Type for Cat {
 pub enum CatError {
     First(Box<TermError>),
     Second(Box<TermError>),
-    FirstNullable(Typed),
+    FirstNullable {
+        punct: Span,
+        fst_span: Span,
+        fst: Typed,
+    },
     FirstFlastOverlap(Typed, Typed),
 }
 
-impl Display for CatError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+impl From<CatError> for syn::Error {
+    fn from(other: CatError) -> Self {
+        match other {
+            CatError::First(e) => (*e).into(),
+            CatError::Second(e) => (*e).into(),
+            CatError::FirstNullable {
+                punct, fst_span, ..
+            } => {
+                let mut err = Self::new(punct, "first item in sequence cannot accept empty string");
+                err.combine(Self::new(fst_span, "this can accept empty string"));
+                err
+            }
+            CatError::FirstFlastOverlap(fst, snd) => {
+                todo!()
+            }
+        }
     }
 }
 
@@ -234,11 +259,11 @@ impl Type for Alt {
             .and_then(|()| self.right.closed(depth))
     }
 
-    fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool> {
+    fn is_nullable(&self, context: &mut NullContext<'_>) -> Option<bool> {
         Some(self.left.is_nullable(context)? || self.right.is_nullable(context)?)
     }
 
-    fn first_set<C: FirstSetContext>(&self, context: &mut C) -> Option<FirstSet> {
+    fn first_set(&self, context: &mut FirstContext<'_>) -> Option<FirstSet> {
         Some(
             self.left
                 .first_set(context)?
@@ -246,7 +271,7 @@ impl Type for Alt {
         )
     }
 
-    fn flast_set<C: FlastSetContext>(&self, context: &mut C) -> Option<FlastSet> {
+    fn flast_set(&self, context: &mut FlastContext) -> Option<FlastSet> {
         Some(
             self.left
                 .flast_set(context)?
@@ -254,12 +279,12 @@ impl Type for Alt {
         )
     }
 
-    fn well_typed<C: FlastSetContext>(self, context: &mut C) -> Result<Typed, Self::Err> {
-        let left = self
+    fn well_typed(self, context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
+        let (left, left_span) = self
             .left
             .well_typed(context)
             .map_err(|e| AltError::Left(Box::new(e)))?;
-        let right = self
+        let (right, right_span) = self
             .right
             .well_typed(context)
             .map_err(|e| AltError::Right(Box::new(e)))?;
@@ -272,12 +297,15 @@ impl Type for Alt {
             let nullable = false;
             let first_set = left.first_set().clone().union(right.first_set().clone());
             let flast_set = left.flast_set().clone().union(right.flast_set().clone());
-            Ok(Typed {
-                kind: TypeKind::Alt(Box::new(left), Box::new(right)),
-                nullable,
-                first_set,
-                flast_set,
-            })
+            Ok((
+                Typed {
+                    kind: TypeKind::Alt(Box::new(left), Box::new(right)),
+                    nullable,
+                    first_set,
+                    flast_set,
+                },
+                left_span.join(right_span).unwrap_or_else(Span::call_site),
+            ))
         }
     }
 }
@@ -290,8 +318,8 @@ pub enum AltError {
     FirstOverlap(Typed, Typed),
 }
 
-impl Display for AltError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl From<AltError> for syn::Error {
+    fn from(other: AltError) -> Self {
         todo!()
     }
 }
@@ -320,7 +348,7 @@ impl Type for Fix {
         self.inner.closed(depth + 1)
     }
 
-    fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool> {
+    fn is_nullable(&self, context: &mut NullContext<'_>) -> Option<bool> {
         fix(Some(false), |last| {
             last.as_ref()
                 .copied()
@@ -328,8 +356,8 @@ impl Type for Fix {
         })
     }
 
-    fn first_set<C: FirstSetContext>(&self, context: &mut C) -> Option<FirstSet> {
-        let nullable = self.is_nullable(context)?;
+    fn first_set(&self, context: &mut FirstContext<'_>) -> Option<FirstSet> {
+        let nullable = self.is_nullable(&mut context.as_null())?;
         fix(Some(FirstSet::new()), |last| {
             last.as_ref().cloned().and_then(|first_set| {
                 context.push_first_set(nullable, first_set, |ctx| self.inner.first_set(ctx))
@@ -337,9 +365,9 @@ impl Type for Fix {
         })
     }
 
-    fn flast_set<C: FlastSetContext>(&self, context: &mut C) -> Option<FlastSet> {
-        let nullable = self.is_nullable(context)?;
-        let first_set = self.first_set(context)?;
+    fn flast_set(&self, context: &mut FlastContext) -> Option<FlastSet> {
+        let nullable = self.is_nullable(&mut context.as_null())?;
+        let first_set = self.first_set(&mut context.as_first())?;
         fix(Some(FlastSet::new()), |last| {
             last.as_ref().cloned().and_then(|flast_set| {
                 context.push_flast_set(nullable, first_set.clone(), flast_set, |ctx| {
@@ -349,22 +377,28 @@ impl Type for Fix {
         })
     }
 
-    fn well_typed<C: FlastSetContext>(self, context: &mut C) -> Result<Typed, Self::Err> {
-        self.inner.closed(context.get_depth() + 1)?;
+    fn well_typed(self, context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
+        self.inner.closed(context.depth() + 1)?;
 
-        let nullable = self.is_nullable(context).unwrap();
-        let first_set = self.first_set(context).unwrap();
+        let span = self.span;
+        let nullable = self.is_nullable(&mut context.as_null()).unwrap();
+        let first_set = self.first_set(&mut context.as_first()).unwrap();
         let flast_set = self.flast_set(context).unwrap();
 
         context
             .push_flast_set(nullable, first_set.clone(), flast_set.clone(), |ctx| {
                 self.inner.well_typed(ctx)
             })
-            .map(|inner| Typed {
-                kind: TypeKind::Fix(Box::new(inner)),
-                nullable,
-                first_set,
-                flast_set,
+            .map(|(inner, _)| {
+                (
+                    Typed {
+                        kind: TypeKind::Fix(Box::new(inner)),
+                        nullable,
+                        first_set,
+                        flast_set,
+                    },
+                    span,
+                )
             })
     }
 }
@@ -392,35 +426,50 @@ impl Type for Variable {
         }
     }
 
-    fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool> {
-        context.get_nullable(self.index)
+    fn is_nullable(&self, context: &mut NullContext<'_>) -> Option<bool> {
+        context.is_nullable(self.index)
     }
 
-    fn first_set<C: FirstSetContext>(&self, context: &mut C) -> Option<FirstSet> {
-        context.get_first_set(self.index).cloned()
+    fn first_set(&self, context: &mut FirstContext<'_>) -> Option<FirstSet> {
+        context.first_set(self.index).cloned()
     }
 
-    fn flast_set<C: FlastSetContext>(&self, context: &mut C) -> Option<FlastSet> {
-        context.get_flast_set(self.index).cloned()
+    fn flast_set(&self, context: &mut FlastContext) -> Option<FlastSet> {
+        context.flast_set(self.index).cloned()
     }
 
-    fn well_typed<C: FlastSetContext>(self, context: &mut C) -> Result<Typed, Self::Err> {
-        self.closed(context.get_depth()).map(|()| Typed {
-            kind: TypeKind::Variable(self.index),
-            nullable: self.is_nullable(context).unwrap(),
-            first_set: self.first_set(context).unwrap(),
-            flast_set: self.flast_set(context).unwrap(),
-        })
+    fn well_typed(self, context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
+        self.closed(context.depth())
+            .map(|()| context.is_guarded(self.index).unwrap())
+            .and_then(|b| {
+                if b {
+                    Ok(())
+                } else {
+                    Err(VariableError::GuardedVariable(self.clone()))
+                }
+            })
+            .map(|()| {
+                (
+                    Typed {
+                        kind: TypeKind::Variable(self.index),
+                        nullable: context.is_nullable(self.index).unwrap(),
+                        first_set: context.first_set(self.index).cloned().unwrap(),
+                        flast_set: context.flast_set(self.index).cloned().unwrap(),
+                    },
+                    self.name.span(),
+                )
+            })
     }
 }
 
 #[derive(Debug)]
 pub enum VariableError {
     FreeVariable(Variable),
+    GuardedVariable(Variable),
 }
 
-impl Display for VariableError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl From<VariableError> for syn::Error {
+    fn from(_: VariableError) -> Self {
         todo!()
     }
 }
@@ -439,25 +488,25 @@ impl Call {
 }
 
 impl Type for Call {
-    type Err = Infallible;
+    type Err = Never;
 
     fn closed(&self, _depth: usize) -> Result<(), VariableError> {
         todo!()
     }
 
-    fn is_nullable<C: NullContext>(&self, _context: &mut C) -> Option<bool> {
+    fn is_nullable(&self, _context: &mut NullContext<'_>) -> Option<bool> {
         todo!()
     }
 
-    fn first_set<C: FirstSetContext>(&self, _context: &mut C) -> Option<FirstSet> {
+    fn first_set(&self, _context: &mut FirstContext<'_>) -> Option<FirstSet> {
         todo!()
     }
 
-    fn flast_set<C: FlastSetContext>(&self, _context: &mut C) -> Option<FlastSet> {
+    fn flast_set(&self, _context: &mut FlastContext) -> Option<FlastSet> {
         todo!()
     }
 
-    fn well_typed<C: FlastSetContext>(self, _context: &mut C) -> Result<Typed, Self::Err> {
+    fn well_typed(self, _context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
         todo!()
     }
 }
@@ -488,7 +537,7 @@ impl Type for Term {
         }
     }
 
-    fn is_nullable<C: NullContext>(&self, context: &mut C) -> Option<bool> {
+    fn is_nullable(&self, context: &mut NullContext<'_>) -> Option<bool> {
         match self {
             Self::Epsilon(e) => e.is_nullable(context),
             Self::Literal(e) => e.is_nullable(context),
@@ -500,7 +549,7 @@ impl Type for Term {
         }
     }
 
-    fn first_set<C: FirstSetContext>(&self, context: &mut C) -> Option<FirstSet> {
+    fn first_set(&self, context: &mut FirstContext<'_>) -> Option<FirstSet> {
         match self {
             Self::Epsilon(e) => e.first_set(context),
             Self::Literal(e) => e.first_set(context),
@@ -512,7 +561,7 @@ impl Type for Term {
         }
     }
 
-    fn flast_set<C: FlastSetContext>(&self, context: &mut C) -> Option<FlastSet> {
+    fn flast_set(&self, context: &mut FlastContext) -> Option<FlastSet> {
         match self {
             Self::Epsilon(e) => e.flast_set(context),
             Self::Literal(e) => e.flast_set(context),
@@ -524,7 +573,7 @@ impl Type for Term {
         }
     }
 
-    fn well_typed<C: FlastSetContext>(self, context: &mut C) -> Result<Typed, Self::Err> {
+    fn well_typed(self, context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
         match self {
             Self::Epsilon(e) => e.well_typed(context).map_err(TermError::from),
             Self::Literal(e) => e.well_typed(context).map_err(TermError::from),
@@ -544,8 +593,8 @@ pub enum TermError {
     Variable(VariableError),
 }
 
-impl From<Infallible> for TermError {
-    fn from(other: Infallible) -> Self {
+impl From<Never> for TermError {
+    fn from(other: Never) -> Self {
         match other {}
     }
 }
@@ -568,13 +617,15 @@ impl From<VariableError> for TermError {
     }
 }
 
-impl Display for TermError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+impl From<TermError> for syn::Error {
+    fn from(other: TermError) -> Self {
+        match other {
+            TermError::Cat(e) => e.into(),
+            TermError::Alt(e) => e.into(),
+            TermError::Variable(e) => e.into(),
+        }
     }
 }
-
-impl Error for TermError {}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum TypeKind {

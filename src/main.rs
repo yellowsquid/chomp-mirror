@@ -1,22 +1,40 @@
 use chomp::{
     ast::{
         convert::{Context, Convert},
-        typed::Type,
+        typed::{FlastContext, Type},
     },
     nibble::Expression,
 };
 use proc_macro2::Span;
-use std::io::{self, Error, ErrorKind, Read, Write};
+use std::process::exit;
+use std::{
+    error::Error,
+    io::{self, Read, Write},
+};
 use syn::Ident;
 
-fn main() -> io::Result<()> {
+fn main() {
     let mut input = String::new();
-    io::stdin().read_to_string(&mut input)?;
-    let nibble: Expression =
-        syn::parse_str(&input).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-    let term = nibble.convert(&Context::new());
-    // FIXME: better error handling here
-    let typed = term.well_typed(&mut Vec::new()).unwrap();
-    let code = typed.emit_code(Ident::new("Ast", Span::call_site()));
-    write!(io::stdout(), "{:#}", code)
+    let res = io::stdin()
+        .read_to_string(&mut input)
+        .map_err(|e| Box::new(e) as Box<dyn Error>)
+        .and_then(|_| syn::parse_str(&input).map_err(|e| Box::new(e) as Box<dyn Error>))
+        .map(|nibble: Expression| {
+            nibble
+                .convert(&Context::new())
+                .well_typed(&mut FlastContext::new())
+        })
+        .map(|res| match res {
+            Ok((typed, _)) => typed.emit_code(Ident::new("Ast", Span::call_site())),
+            Err(e) => syn::Error::from(e).to_compile_error(),
+        })
+        .and_then(|code| {
+            write!(io::stdout(), "{:#}", code).map_err(|e| Box::new(e) as Box<dyn Error>)
+        });
+
+    if let Err(e) = res {
+        eprintln!("{}", e);
+        drop(e);
+        exit(1)
+    }
 }
