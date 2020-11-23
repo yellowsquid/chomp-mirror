@@ -30,16 +30,7 @@ fn fix<R: PartialEq, F: FnMut(&R) -> R>(init: R, mut step: F) -> R {
     res
 }
 
-#[derive(Copy, Clone, Debug)]
-pub struct Epsilon {
-    span: Span,
-}
-
-impl Epsilon {
-    pub fn new(span: Span) -> Self {
-        Self { span }
-    }
-}
+pub type Epsilon = Token![_];
 
 impl Type for Epsilon {
     type Err = Never;
@@ -826,7 +817,7 @@ impl TypeKind {
 impl Display for TypeKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Epsilon => write!(f, "()"),
+            Self::Epsilon => write!(f, "_"),
             Self::Literal(s) => write!(f, "{:?}", s),
             Self::Cat(fst, snd) => write!(f, "{}.{}", fst, snd),
             Self::Alt(left, right) => write!(f, "({} | {})", left, right),

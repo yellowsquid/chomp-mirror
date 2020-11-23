@@ -3,34 +3,18 @@ use crate::ast::{
     convert::{Context, Convert},
 };
 use proc_macro2::Span;
-use syn::ext::IdentExt;
-use syn::punctuated::Pair;
-use syn::punctuated::Punctuated;
 use syn::{
+    ext::IdentExt,
     parse::{Parse, ParseStream},
-    token, Result,
+    punctuated::{Pair, Punctuated},
+    token, Result, Token,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Epsilon {
-    paren_tok: token::Paren,
-}
-
-impl Parse for Epsilon {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let content;
-        let paren_tok = syn::parenthesized!(content in input);
-        if content.is_empty() {
-            Ok(Self { paren_tok })
-        } else {
-            Err(content.error("expected empty parentheses"))
-        }
-    }
-}
+pub type Epsilon = Token![_];
 
 impl Convert for Epsilon {
     fn convert(self, _: &Context) -> ast::Term {
-        ast::Term::Epsilon(ast::Epsilon::new(self.paren_tok.span))
+        ast::Term::Epsilon(self)
     }
 }
 
@@ -62,7 +46,13 @@ impl Convert for Literal {
 pub struct Call {
     name: Ident,
     paren_tok: token::Paren,
-    args: Punctuated<Expression, syn::Token![,]>,
+    args: Punctuated<Expression, Token![,]>,
+}
+
+impl Call {
+    fn span(&self) -> Span {
+        self.name.span().join(self.paren_tok.span).unwrap_or_else(Span::call_site)
+    }
 }
 
 impl Parse for Call {
@@ -82,10 +72,7 @@ impl Parse for Call {
 impl Convert for Call {
     fn convert(self, context: &Context) -> ast::Term {
         use ast::Term;
-        let span = self.name
-            .span()
-            .join(self.paren_tok.span)
-            .unwrap_or_else(Span::call_site);
+        let span = self.span();
         Term::Call(ast::Call::new(
             self.name,
             self.args
@@ -108,12 +95,17 @@ pub struct Fix {
     expr: Expression,
 }
 
+impl Fix {
+    fn span(&self) -> Span {
+        self.bracket_token.span.join(self.paren_token.span).unwrap_or_else(Span::call_site)
+    }
+}
+
 impl Parse for Fix {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         let arg;
         let bracket_token = syn::bracketed!(arg in input);
         let arg = arg.call(Ident::parse_any)?;
-
         let expr;
         let paren_token = syn::parenthesized!(expr in input);
         let expr = expr.parse()?;
@@ -129,15 +121,13 @@ impl Parse for Fix {
 impl Convert for Fix {
     fn convert(self, context: &Context) -> ast::Term {
         use ast::Term;
+        let span = self.span();
         let expr = self.expr;
         let arg_name = self.arg.to_string();
         Term::Fix(ast::Fix::new(
             self.arg,
             context.push(arg_name, |c| expr.convert(c)),
-            self.bracket_token
-                .span
-                .join(self.paren_token.span)
-                .unwrap_or_else(Span::call_site),
+            span,
         ))
     }
 }
@@ -146,6 +136,12 @@ impl Convert for Fix {
 pub struct ParenExpression {
     paren_tok: token::Paren,
     expr: Expression,
+}
+
+impl ParenExpression {
+    fn span(&self) -> Span {
+        self.paren_tok.span
+    }
 }
 
 impl Parse for ParenExpression {
@@ -173,19 +169,34 @@ pub enum Term {
     Parens(ParenExpression),
 }
 
+impl Term {
+    fn span(&self) -> Span {
+        match self {
+            Self::Epsilon(eps) => eps.span,
+            Self::Ident(ident) => ident.span(),
+            Self::Literal(lit) => lit.span(),
+            Self::Call(call) => call.span(),
+            Self::Fix(fix) => fix.span(),
+            Self::Parens(paren) => paren.span(),
+        }
+    }
+}
+
 impl Parse for Term {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         let lookahead = input.lookahead1();
-        if lookahead.peek(token::Paren) {
+        if lookahead.peek(Token![_]) {
+            input.parse().map(Self::Epsilon)
+        } else if lookahead.peek(syn::LitStr) {
+            input.parse().map(Self::Literal)
+        } else if lookahead.peek(token::Bracket) {
+            input.parse().map(Self::Fix)
+        } else if lookahead.peek(token::Paren) {
             let content;
             let paren_tok = syn::parenthesized!(content in input);
-            if content.is_empty() {
-                Ok(Self::Epsilon(Epsilon { paren_tok }))
-            } else {
-                content
-                    .parse()
-                    .map(|expr| Self::Parens(ParenExpression { paren_tok, expr }))
-            }
+            content
+                .parse()
+                .map(|expr| Self::Parens(ParenExpression { paren_tok, expr }))
         } else if lookahead.peek(Ident::peek_any) {
             let name = input.call(Ident::parse_any)?;
             if input.peek(token::Paren) {
@@ -198,13 +209,9 @@ impl Parse for Term {
                         args,
                     })
                 })
-            } else {
+            }else {
                 Ok(Self::Ident(name))
             }
-        } else if lookahead.peek(token::Bracket) {
-            input.parse().map(Self::Fix)
-        } else if lookahead.peek(syn::LitStr) {
-            input.parse().map(Self::Literal)
         } else {
             Err(lookahead.error())
         }
@@ -226,7 +233,26 @@ impl Convert for Term {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Cat {
-    terms: Punctuated<Term, syn::Token![.]>,
+    terms: Punctuated<Term, Token![.]>,
+}
+
+impl Cat {
+    fn span(&self) -> Span {
+        let mut pairs = self.terms.pairs();
+        let mut span = pairs.next().and_then(|pair| match pair {
+            Pair::Punctuated(term, punct) => term.span().join(punct.span),
+            Pair::End(term) => Some(term.span()),
+        });
+
+        for pair in pairs {
+            span = span.and_then(|span| match pair {
+                Pair::Punctuated(term, punct) => span.join(term.span()).and_then(|s| s.join(punct.span)),
+                Pair::End(term) => span.join(term.span()),
+            })
+        }
+
+        span.unwrap_or_else(Span::call_site)
+    }
 }
 
 impl Parse for Cat {
@@ -254,7 +280,26 @@ impl Convert for Cat {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Alt {
-    cats: Punctuated<Cat, syn::Token![|]>,
+    cats: Punctuated<Cat, Token![|]>,
+}
+
+impl Alt {
+    fn span(&self) -> Span {
+        let mut pairs = self.cats.pairs();
+        let mut span = pairs.next().and_then(|pair| match pair {
+            Pair::Punctuated(cat, punct) => cat.span().join(punct.span),
+            Pair::End(cat) => Some(cat.span()),
+        });
+
+        for pair in pairs {
+            span = span.and_then(|span| match pair {
+                Pair::Punctuated(cat, punct) => span.join(cat.span()).and_then(|s| s.join(punct.span)),
+                Pair::End(cat) => span.join(cat.span()),
+            })
+        }
+
+        span.unwrap_or_else(Span::call_site)
+    }
 }
 
 impl Parse for Alt {
@@ -289,11 +334,7 @@ mod tests {
 
     #[test]
     fn parse_epsilon() {
-        assert!(parse_str::<Epsilon>("()").is_ok());
-        assert!(parse_str::<Epsilon>("(  )").is_ok());
-        assert!(parse_str::<Epsilon>("(").is_err());
-        assert!(parse_str::<Epsilon>(")").is_err());
-        assert!(parse_str::<Epsilon>("(x)").is_err());
+        assert!(parse_str::<Epsilon>("_").is_ok());
     }
 
     #[test]
