@@ -267,14 +267,21 @@ impl Convert for Cat {
     fn convert(self, context: &Context) -> ast::Term {
         use ast::Term;
         let mut iter = self.terms.into_pairs();
-        let init = match iter.next_back().unwrap() {
-            Pair::Punctuated(_, _) => unreachable!(),
-            Pair::End(t) => t.convert(context),
+        let init = match iter.next().unwrap() {
+            Pair::Punctuated(t, p) => Ok((t.convert(context), p)),
+            Pair::End(t) => Err(t.convert(context)),
         };
-        iter.rfold(init, |term, pair| match pair {
-            Pair::Punctuated(t, p) => Term::Cat(ast::Cat::new(t.convert(context), p, term)),
-            Pair::End(_) => unreachable!(),
-        })
+        iter.fold(init, |term, pair|{
+            let (fst, punct) = term.unwrap();
+            match pair {
+                Pair::Punctuated(t, p) => {
+                    Ok((Term::Cat(ast::Cat::new(fst, punct, t.convert(context))), p))
+                }
+                Pair::End(t) => {
+                    Err(Term::Cat(ast::Cat::new(fst, punct, t.convert(context))))
+                }
+            }
+        }).unwrap_err()
     }
 }
 
@@ -312,16 +319,23 @@ impl Parse for Alt {
 
 impl Convert for Alt {
     fn convert(self, context: &Context) -> ast::Term {
-        use ast::Term;
-        let mut iter = self.cats.into_pairs();
-        let init = match iter.next_back().unwrap() {
-            Pair::Punctuated(_, _) => unreachable!(),
-            Pair::End(t) => t.convert(context),
-        };
-        iter.rfold(init, |term, pair| match pair {
-            Pair::Punctuated(t, p) => Term::Alt(ast::Alt::new(t.convert(context), p, term)),
-            Pair::End(_) => unreachable!(),
-        })
+            use ast::Term;
+            let mut iter = self.cats.into_pairs();
+            let init = match iter.next().unwrap() {
+                Pair::Punctuated(t, p) => Ok((t.convert(context), p)),
+                Pair::End(t) => Err(t.convert(context)),
+            };
+            iter.fold(init, |cat, pair|{
+                let (left, punct) = cat.unwrap();
+                match pair {
+                    Pair::Punctuated(t, p) => {
+                        Ok((Term::Alt(ast::Alt::new(left, punct, t.convert(context))), p))
+                    }
+                    Pair::End(t) => {
+                        Err(Term::Alt(ast::Alt::new(left, punct, t.convert(context))))
+                    }
+                }
+            }).unwrap_err()
     }
 }
 
