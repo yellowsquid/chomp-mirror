@@ -21,7 +21,7 @@ fn main() {
         .and_then(|_| syn::parse_str(&input).map_err(|e| Box::new(e) as Box<dyn Error>))
         .and_then(|nibble: Expression| {
             nibble
-                .convert(&Context::new())
+                .convert(&mut Context::new())
                 .well_typed(&mut FlastContext::new())
                 .map_err(|e| Box::new(e) as Box<dyn Error>)
         })
