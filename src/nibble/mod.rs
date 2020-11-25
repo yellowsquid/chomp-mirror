@@ -1,3 +1,6 @@
+use std::rc::Rc;
+
+use crate::ast::convert::ConvertMode;
 use crate::ast::{
     self,
     convert::{Context, Convert},
@@ -10,12 +13,10 @@ use syn::{
     token, Result, Token,
 };
 
-const PREFER_SUBST_OVER_CALL: bool = true;
-
 pub type Epsilon = Token![_];
 
 impl Convert for Epsilon {
-    fn convert(&self, _: &mut Context) -> ast::Term {
+    fn convert(&self, _: &mut Context, _: ConvertMode) -> ast::Term {
         ast::Term::Epsilon(*self)
     }
 }
@@ -23,24 +24,31 @@ impl Convert for Epsilon {
 type Ident = syn::Ident;
 
 impl Convert for Ident {
-    fn convert(&self, context: &mut Context) -> ast::Term {
+    fn convert(&self, context: &mut Context, mode: ConvertMode) -> ast::Term {
         use ast::Term;
         let name = self.to_string();
 
         if let Some(variable) = context.get_binding(&name) {
             Term::Variable(ast::Variable::new(self.clone(), variable))
-        } else if PREFER_SUBST_OVER_CALL {
-            if let Some(term) = context.get_variable(&name) {
-                term.clone()
-            } else if let Some(term) = context.call_function(&name, std::iter::empty()) {
-                term
-            } else {
-                let span = self.span();
-                Term::Call(ast::Call::new(self.clone(), Vec::new(), span))
-            }
         } else {
-            let span = self.span();
-            Term::Call(ast::Call::new(self.clone(), Vec::new(), span))
+            match mode {
+                ConvertMode::NoSubstitution => {
+                    let span = self.span();
+                    Term::Call(ast::Call::new(self.clone(), Vec::new(), span))
+                }
+                ConvertMode::WithSubstitution => {
+                    if let Some(term) = context.get_variable(&name) {
+                        term.clone()
+                    } else if let Some(term) =
+                        context.call_function(&name, std::iter::empty(), mode)
+                    {
+                        term
+                    } else {
+                        let span = self.span();
+                        Term::Call(ast::Call::new(self.clone(), Vec::new(), span))
+                    }
+                }
+            }
         }
     }
 }
@@ -48,60 +56,86 @@ impl Convert for Ident {
 type Literal = syn::LitStr;
 
 impl Convert for Literal {
-    fn convert(&self, _: &mut Context) -> ast::Term {
+    fn convert(&self, _: &mut Context, _: ConvertMode) -> ast::Term {
         ast::Term::Literal(self.clone())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArgList<T> {
+    paren_token: token::Paren,
+    args: Punctuated<T, token::Comma>,
+}
+
+impl<T> ArgList<T> {
+    fn span(&self) -> Span {
+        self.paren_token.span
+    }
+}
+
+impl<T> IntoIterator for ArgList<T> {
+    type Item = T;
+    type IntoIter = <Punctuated<T, Token![,]> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.args.into_iter()
+    }
+}
+
+impl<T: Parse> Parse for ArgList<T> {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let args;
+        let paren_token = syn::parenthesized!(args in input);
+        let args = args.call(Punctuated::parse_terminated)?;
+        Ok(Self { paren_token, args })
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Call {
     name: Ident,
-    paren_tok: token::Paren,
-    args: Punctuated<Expression, Token![,]>,
+    args: ArgList<Expression>,
 }
 
 impl Call {
     fn span(&self) -> Span {
         self.name
             .span()
-            .join(self.paren_tok.span)
+            .join(self.args.span())
             .unwrap_or_else(Span::call_site)
     }
 }
 
 impl Parse for Call {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let args;
         let name = input.call(Ident::parse_any)?;
-        let paren_tok = syn::parenthesized!(args in input);
-        let args = args.call(Punctuated::parse_terminated)?;
-        Ok(Self {
-            name,
-            paren_tok,
-            args,
-        })
+        let args = input.parse()?;
+        Ok(Self { name, args })
     }
 }
 
 impl Convert for Call {
-    fn convert(&self, context: &mut Context) -> ast::Term {
+    fn convert(&self, context: &mut Context, mode: ConvertMode) -> ast::Term {
         use ast::Term;
-        let args: Vec<_> = self
+        let args = self
             .args
-            .pairs()
-            .map(|pair| match pair {
-                Pair::Punctuated(t, _) => t.convert(context),
-                Pair::End(t) => t.convert(context),
-            })
-            .collect();
-        if PREFER_SUBST_OVER_CALL {
-            if let Some(term) = context.call_function(&self.name.to_string(), args.clone()) {
-                term
-            } else {
+            .clone()
+            .into_iter()
+            .map(|arg| arg.convert(context, mode))
+            .collect::<Vec<_>>();
+        match mode {
+            ConvertMode::NoSubstitution => {
                 Term::Call(ast::Call::new(self.name.clone(), args, self.span()))
             }
-        } else {
-            Term::Call(ast::Call::new(self.name.clone(), args, self.span()))
+            ConvertMode::WithSubstitution => {
+                if let Some(term) =
+                    context.call_function(&self.name.to_string(), args.clone(), mode)
+                {
+                    term
+                } else {
+                    Term::Call(ast::Call::new(self.name.clone(), args, self.span()))
+                }
+            }
         }
     }
 }
@@ -141,14 +175,14 @@ impl Parse for Fix {
 }
 
 impl Convert for Fix {
-    fn convert(&self, context: &mut Context) -> ast::Term {
+    fn convert(&self, context: &mut Context, mode: ConvertMode) -> ast::Term {
         use ast::Term;
         let span = self.span();
         let expr = &self.expr;
         let arg_name = self.arg.to_string();
         Term::Fix(ast::Fix::new(
             self.arg.clone(),
-            context.push_binding(arg_name, |c| expr.convert(c)),
+            context.push_binding(arg_name, |ctx| expr.convert(ctx, mode)),
             span,
         ))
     }
@@ -176,8 +210,8 @@ impl Parse for ParenExpression {
 }
 
 impl Convert for ParenExpression {
-    fn convert(&self, context: &mut Context) -> ast::Term {
-        self.expr.convert(context)
+    fn convert(&self, context: &mut Context, mode: ConvertMode) -> ast::Term {
+        self.expr.convert(context, mode)
     }
 }
 
@@ -222,15 +256,7 @@ impl Parse for Term {
         } else if lookahead.peek(Ident::peek_any) {
             let name = input.call(Ident::parse_any)?;
             if input.peek(token::Paren) {
-                let args;
-                let paren_tok = syn::parenthesized!(args in input);
-                args.call(Punctuated::parse_terminated).map(|args| {
-                    Self::Call(Call {
-                        name,
-                        paren_tok,
-                        args,
-                    })
-                })
+                input.parse().map(|args| Self::Call(Call { name, args }))
             } else {
                 Ok(Self::Ident(name))
             }
@@ -241,14 +267,14 @@ impl Parse for Term {
 }
 
 impl Convert for Term {
-    fn convert(&self, context: &mut Context) -> ast::Term {
+    fn convert(&self, context: &mut Context, mode: ConvertMode) -> ast::Term {
         match self {
-            Self::Epsilon(e) => e.convert(context),
-            Self::Ident(i) => i.convert(context),
-            Self::Literal(l) => l.convert(context),
-            Self::Call(c) => c.convert(context),
-            Self::Fix(f) => f.convert(context),
-            Self::Parens(e) => e.convert(context),
+            Self::Epsilon(e) => e.convert(context, mode),
+            Self::Ident(i) => i.convert(context, mode),
+            Self::Literal(l) => l.convert(context, mode),
+            Self::Call(c) => c.convert(context, mode),
+            Self::Fix(f) => f.convert(context, mode),
+            Self::Parens(e) => e.convert(context, mode),
         }
     }
 }
@@ -288,20 +314,25 @@ impl Parse for Cat {
 }
 
 impl Convert for Cat {
-    fn convert(&self, context: &mut Context) -> ast::Term {
+    fn convert(&self, context: &mut Context, mode: ConvertMode) -> ast::Term {
         use ast::Term;
         let mut iter = self.terms.pairs();
         let init = match iter.next().unwrap() {
-            Pair::Punctuated(t, p) => Ok((t.convert(context), p)),
-            Pair::End(t) => Err(t.convert(context)),
+            Pair::Punctuated(t, p) => Ok((t.convert(context, mode), p)),
+            Pair::End(t) => Err(t.convert(context, mode)),
         };
         iter.fold(init, |term, pair| {
             let (fst, punct) = term.unwrap();
             match pair {
-                Pair::Punctuated(t, p) => {
-                    Ok((Term::Cat(ast::Cat::new(fst, *punct, t.convert(context))), p))
-                }
-                Pair::End(t) => Err(Term::Cat(ast::Cat::new(fst, *punct, t.convert(context)))),
+                Pair::Punctuated(t, p) => Ok((
+                    Term::Cat(ast::Cat::new(fst, *punct, t.convert(context, mode))),
+                    p,
+                )),
+                Pair::End(t) => Err(Term::Cat(ast::Cat::new(
+                    fst,
+                    *punct,
+                    t.convert(context, mode),
+                ))),
             }
         })
         .unwrap_err()
@@ -343,21 +374,25 @@ impl Parse for Alt {
 }
 
 impl Convert for Alt {
-    fn convert(&self, context: &mut Context) -> ast::Term {
+    fn convert(&self, context: &mut Context, mode: ConvertMode) -> ast::Term {
         use ast::Term;
         let mut iter = self.cats.pairs();
         let init = match iter.next().unwrap() {
-            Pair::Punctuated(t, p) => Ok((t.convert(context), p)),
-            Pair::End(t) => Err(t.convert(context)),
+            Pair::Punctuated(t, p) => Ok((t.convert(context, mode), p)),
+            Pair::End(t) => Err(t.convert(context, mode)),
         };
         iter.fold(init, |cat, pair| {
             let (left, punct) = cat.unwrap();
             match pair {
                 Pair::Punctuated(t, p) => Ok((
-                    Term::Alt(ast::Alt::new(left, *punct, t.convert(context))),
+                    Term::Alt(ast::Alt::new(left, *punct, t.convert(context, mode))),
                     p,
                 )),
-                Pair::End(t) => Err(Term::Alt(ast::Alt::new(left, *punct, t.convert(context)))),
+                Pair::End(t) => Err(Term::Alt(ast::Alt::new(
+                    left,
+                    *punct,
+                    t.convert(context, mode),
+                ))),
             }
         })
         .unwrap_err()
@@ -365,6 +400,92 @@ impl Convert for Alt {
 }
 
 pub type Expression = Alt;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LetStatement {
+    let_token: Token![let],
+    name: Ident,
+    args: Option<ArgList<Ident>>,
+    eq_token: Token![=],
+    expr: Expression,
+    semi_token: Token![;],
+}
+
+impl Parse for LetStatement {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let let_token = input.parse()?;
+        let name = input.call(Ident::parse_any)?;
+        let args = if input.peek(token::Paren) {
+            Some(input.parse()?)
+        } else {
+            None
+        };
+        let eq_token = input.parse()?;
+        let expr = input.parse()?;
+        let semi_token = input.parse()?;
+
+        Ok(Self {
+            let_token,
+            name,
+            args,
+            eq_token,
+            expr,
+            semi_token,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Goal {
+    match_token: Token![match],
+    expr: Expression,
+}
+
+impl Parse for Goal {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let match_token = input.parse()?;
+        let expr = input.parse()?;
+
+        Ok(Self { match_token, expr })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct File {
+    lets: Vec<LetStatement>,
+    goal: Goal,
+}
+
+impl File {
+    pub fn convert_with_substitution(self) -> ast::Term {
+        let mut context = Context::new();
+        for statement in self.lets {
+            context.add_function(
+                statement.name.to_string(),
+                Rc::new(statement.expr),
+                statement
+                    .args
+                    .map(|args| args.into_iter().map(|arg| arg.to_string()).collect())
+                    .unwrap_or_default(),
+            );
+        }
+
+        self.goal.expr.convert(&mut context, ConvertMode::WithSubstitution)
+    }
+}
+
+impl Parse for File {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let mut lets = Vec::new();
+        while input.peek(Token![let]) {
+            lets.push(input.parse()?);
+        }
+
+        let goal = input.parse()?;
+
+        Ok(Self { lets, goal })
+    }
+}
 
 #[cfg(test)]
 mod tests {

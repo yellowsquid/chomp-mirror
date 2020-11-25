@@ -1,15 +1,12 @@
 use chomp::{
-    ast::{
-        convert::{Context, Convert},
-        typed::{FlastContext, Type},
-    },
-    nibble::Expression,
+    ast::typed::{FlastContext, Type},
+    nibble::File,
 };
 use proc_macro2::Span;
-use std::process::exit;
 use std::{
     error::Error,
     io::{self, Read, Write},
+    process::exit,
 };
 use syn::Ident;
 
@@ -19,9 +16,9 @@ fn main() {
         .read_to_string(&mut input)
         .map_err(|e| Box::new(e) as Box<dyn Error>)
         .and_then(|_| syn::parse_str(&input).map_err(|e| Box::new(e) as Box<dyn Error>))
-        .and_then(|nibble: Expression| {
+        .and_then(|nibble: File| {
             nibble
-                .convert(&mut Context::new())
+                .convert_with_substitution()
                 .well_typed(&mut FlastContext::new())
                 .map_err(|e| Box::new(e) as Box<dyn Error>)
         })

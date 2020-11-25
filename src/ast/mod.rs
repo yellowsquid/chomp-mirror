@@ -603,6 +603,7 @@ impl Type for Call {
     type Err = Never;
 
     fn closed(&self, _depth: usize) -> Result<(), VariableError> {
+        dbg!(&self.name);
         todo!()
     }
 

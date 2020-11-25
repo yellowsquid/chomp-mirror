@@ -123,6 +123,7 @@ impl Context {
         &mut self,
         name: &T,
         args: I,
+        convert_mode: ConvertMode,
     ) -> Option<Term>
     where
         String: Borrow<T>,
@@ -151,7 +152,7 @@ impl Context {
                 self.variables.insert(var, value);
             }
 
-            let res = Some(term.clone().convert(self));
+            let res = Some(term.clone().convert(self, convert_mode));
 
             for (name, value, indices) in old {
                 for (index, binding) in indices {
@@ -166,6 +167,12 @@ impl Context {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConvertMode {
+    NoSubstitution,
+    WithSubstitution,
+}
+
 pub trait Convert: std::fmt::Debug {
-    fn convert(&self, context: &mut Context) -> Term;
+    fn convert(&self, context: &mut Context, mode: ConvertMode) -> Term;
 }
