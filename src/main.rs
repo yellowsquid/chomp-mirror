@@ -1,7 +1,4 @@
-use chomp::{
-    ast::typed::{FlastContext, Type},
-    nibble::File,
-};
+use chomp::{ast::TypeCheck, nibble::File};
 use proc_macro2::Span;
 use std::{
     error::Error,
@@ -17,9 +14,9 @@ fn main() {
         .map_err(|e| Box::new(e) as Box<dyn Error>)
         .and_then(|_| syn::parse_str(&input).map_err(|e| Box::new(e) as Box<dyn Error>))
         .and_then(|nibble: File| {
-            nibble
-                .convert_with_substitution()
-                .well_typed(&mut FlastContext::new())
+            dbg!(nibble
+                .convert_with_substitution())
+                .fold(&mut TypeCheck::new())
                 .map_err(|e| Box::new(e) as Box<dyn Error>)
         })
         .map(|(typed, _)| typed.emit_code(Ident::new("Ast", Span::call_site())))

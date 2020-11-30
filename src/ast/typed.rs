@@ -4,16 +4,14 @@ use super::Typed;
 use super::VariableError;
 use std::collections::BTreeSet;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct FirstSet {
     inner: BTreeSet<char>,
 }
 
 impl FirstSet {
     pub fn new() -> Self {
-        Self {
-            inner: BTreeSet::new(),
-        }
+        Self::default()
     }
 
     pub fn of_str(s: &str) -> Self {
@@ -27,9 +25,8 @@ impl FirstSet {
         self.inner.is_empty()
     }
 
-    pub fn union(mut self, mut other: Self) -> Self {
+    pub fn union(&mut self, mut other: Self) {
         self.inner.append(&mut other.inner);
-        self
     }
 
     pub fn intersect(&self, other: &Self) -> Self {
@@ -49,30 +46,26 @@ impl IntoIterator for FirstSet {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct FlastSet {
     inner: BTreeSet<char>,
 }
 
 impl FlastSet {
     pub fn new() -> Self {
-        Self {
-            inner: BTreeSet::new(),
-        }
+        Self::default()
     }
 
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
-    pub fn union_first(mut self, mut other: FirstSet) -> Self {
+    pub fn union_first(&mut self, mut other: FirstSet) {
         self.inner.append(&mut other.inner);
-        self
     }
 
-    pub fn union(mut self, mut other: Self) -> Self {
+    pub fn union(&mut self, mut other: Self) {
         self.inner.append(&mut other.inner);
-        self
     }
 
     pub fn intersect_first(&self, other: &FirstSet) -> Self {
@@ -90,7 +83,7 @@ impl FlastSet {
 
 #[derive(Debug)]
 pub struct NullContext<'a> {
-    inner: &'a mut FlastContext
+    inner: &'a mut FlastContext,
 }
 
 impl NullContext<'_> {
@@ -102,20 +95,38 @@ impl NullContext<'_> {
         self.inner.is_guarded(index)
     }
 
-    pub fn unguard<F: FnOnce(&mut NullContext<'_>) -> R, R>(&mut self, f: F) -> R {
-        self.inner.unguard(|ctx| f(&mut NullContext {inner: ctx}))
+    pub fn with_unguard<F: FnOnce(&mut Self) -> R, R>(&mut self, f: F) -> R {
+        self.unguard();
+        let res = f(self);
+        self.guard();
+        res
+    }
+
+    pub(crate) fn unguard(&mut self) {
+        self.inner.unguard()
+    }
+
+    pub(crate) fn guard(&mut self) {
+        self.inner.guard()
     }
 
     pub fn is_nullable(&self, index: usize) -> Option<bool> {
         self.inner.is_nullable(index)
     }
 
-    pub fn push_nullable<F: FnOnce(&mut NullContext<'_>) -> R, R>(
-        &mut self,
-        nullable: bool,
-        f: F,
-    ) -> R {
-        self.inner.push_nullable(nullable, f)
+    pub fn with_nullable<F: FnOnce(&mut Self) -> R, R>(&mut self, nullable: bool, f: F) -> R {
+        self.push_nullable(nullable);
+        let res = f(self);
+        self.guard();
+        res
+    }
+
+    pub(crate) fn push_nullable(&mut self, nullable: bool) {
+        self.inner.push_nullable(nullable)
+    }
+
+    pub(crate) fn pop_nullable(&mut self) {
+        self.inner.pop_nullable()
     }
 }
 
@@ -133,45 +144,51 @@ impl FirstContext<'_> {
         self.inner.is_guarded(index)
     }
 
-    pub fn unguard<F: FnOnce(&mut FirstContext<'_>) -> R, R>(&mut self, f: F) -> R {
-        self.inner.unguard(|ctx| {
-            f(&mut FirstContext{inner: ctx})
-        })
+    pub fn with_unguard<F: FnOnce(&mut Self) -> R, R>(&mut self, f: F) -> R {
+        self.unguard();
+        let res = f(self);
+        self.guard();
+        res
     }
 
-    pub fn is_nullable(&self, index: usize) -> Option<bool> {
-        self.inner.is_nullable(index)
+    pub(crate) fn unguard(&mut self) {
+        self.inner.unguard()
     }
 
-    pub fn push_nullable<F: FnOnce(&mut NullContext<'_>) -> R, R>(
-        &mut self,
-        nullable: bool,
-        f: F,
-    ) -> R {
-        self.inner.push_nullable(nullable, f)
+    pub(crate) fn guard(&mut self) {
+        self.inner.guard()
     }
 
     pub fn first_set(&self, index: usize) -> Option<&FirstSet> {
         self.inner.first_set(index)
     }
 
-    pub fn push_first_set<F: FnOnce(&mut FirstContext<'_>) -> R, R>(
+    pub fn with_first_set<F: FnOnce(&mut Self) -> R, R>(
         &mut self,
         nullable: bool,
         first_set: FirstSet,
         f: F,
     ) -> R {
-        self.inner.push_first_set(nullable, first_set, f)
+        self.push_first_set(nullable, first_set);
+        let res = f(self);
+        self.pop_first_set();
+        res
+    }
+
+    pub(crate) fn push_first_set(&mut self, nullable: bool, first_set: FirstSet) {
+        self.inner.push_first_set(nullable, first_set)
+    }
+
+    pub(crate) fn pop_first_set(&mut self) {
+        self.inner.pop_first_set()
     }
 
     pub fn as_null(&mut self) -> NullContext<'_> {
-        NullContext {
-           inner: self.inner
-        }
+        NullContext { inner: self.inner }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct FlastContext {
     data: Vec<(bool, FirstSet, FlastSet)>,
     guard: Vec<usize>,
@@ -179,10 +196,7 @@ pub struct FlastContext {
 
 impl FlastContext {
     pub fn new() -> Self {
-        Self {
-            data: Vec::new(),
-            guard: Vec::new(),
-        }
+        Self::default()
     }
 
     pub fn depth(&self) -> usize {
@@ -193,73 +207,83 @@ impl FlastContext {
         if self.data.len() <= index {
             None
         } else if self.guard.is_empty() {
-            Some(false)
+            Some(true)
         } else {
-            Some(self.guard[self.guard.len() - 1] + index >= self.data.len())
+            Some(self.guard[self.guard.len() - 1] + index < self.data.len())
         }
     }
 
-    pub fn unguard<F: FnOnce(&mut Self) -> R, R>(&mut self, f: F) -> R {
-        self.guard.push(self.data.len());
+    pub fn with_unguard<F: FnOnce(&mut Self) -> R, R>(&mut self, f: F) -> R {
+        self.unguard();
         let res = f(self);
-        self.guard.pop();
+        self.guard();
         res
     }
 
-    pub fn is_nullable(&self, index: usize) -> Option<bool> {
+    pub(crate) fn unguard(&mut self) {
+        self.guard.push(self.data.len());
+    }
+
+    pub(crate) fn guard(&mut self) {
+        self.guard.pop();
+    }
+
+    fn is_nullable(&self, index: usize) -> Option<bool> {
         self.data.get(index).map(|(null, _, _)| *null)
     }
 
-    pub fn push_nullable<F: FnOnce(&mut NullContext<'_>) -> R, R>(
-        &mut self,
-        nullable: bool,
-        f: F,
-    ) -> R {
-        self.push_first_set(nullable, FirstSet::new(), |ctx| {
-            f(&mut ctx.as_null())
-        })
+    fn push_nullable(&mut self, nullable: bool) {
+        self.data
+            .push((nullable, FirstSet::default(), FlastSet::default()))
     }
 
-    pub fn first_set(&self, index: usize) -> Option<&FirstSet> {
+    fn pop_nullable(&mut self) {
+        self.data.pop();
+    }
+
+    fn first_set(&self, index: usize) -> Option<&FirstSet> {
         self.data.get(index).map(|(_, first, _)| first)
     }
 
-    pub fn push_first_set<F: FnOnce(&mut FirstContext<'_>) -> R, R>(
-        &mut self,
-        nullable: bool,
-        first_set: FirstSet,
-        f: F,
-    ) -> R {
-        self.push_flast_set(nullable, first_set, FlastSet::new(), |ctx| f(&mut ctx.as_first()))
+    fn push_first_set(&mut self, nullable: bool, first_set: FirstSet) {
+        self.data.push((nullable, first_set, FlastSet::default()))
+    }
+
+    fn pop_first_set(&mut self) {
+        self.data.pop();
     }
 
     pub fn flast_set(&self, index: usize) -> Option<&FlastSet> {
         self.data.get(index).map(|(_, _, flast)| flast)
     }
 
-    pub fn push_flast_set<F: FnOnce(&mut Self) -> R, R>(
+    pub fn with_flast_set<F: FnOnce(&mut Self) -> R, R>(
         &mut self,
         nullable: bool,
         first_set: FirstSet,
         flast_set: FlastSet,
         f: F,
     ) -> R {
-        self.data.push((nullable, first_set, flast_set));
+        self.push_flast_set(nullable, first_set, flast_set);
         let res = f(self);
-        self.data.pop();
+        self.pop_flast_set();
         res
     }
 
+    pub(crate) fn push_flast_set(&mut self, nullable: bool, first_set: FirstSet, flast_set: FlastSet) {
+        self.data.push((nullable, first_set, flast_set));
+    }
+
+    pub(crate) fn pop_flast_set(&mut self) {
+        self.data.pop();
+    }
+
     pub fn as_first(&mut self) -> FirstContext<'_> {
-        FirstContext {
-            inner: self
-        }
+        FirstContext { inner: self }
     }
 
     pub fn as_null(&mut self) -> NullContext<'_> {
-        NullContext{
-            inner: self
-        }
+        NullContext { inner: self }
     }
 }
 

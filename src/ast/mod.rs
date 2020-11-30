@@ -1,4 +1,4 @@
-use self::typed::{FirstContext, FirstSet, FlastContext, FlastSet, NullContext, Type};
+use self::typed::{FirstContext, FlastContext, NullContext};
 use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::{format_ident, quote};
 use std::collections::{BTreeSet, HashMap};
@@ -18,88 +18,9 @@ impl From<Never> for syn::Error {
     }
 }
 
-fn fix<R: PartialEq, F: FnMut(&R) -> R>(init: R, mut step: F) -> R {
-    let mut res = init;
-    let mut last = None;
-
-    while last.map(|v| v != res).unwrap_or(true) {
-        last = Some(res);
-        res = step(last.as_ref().unwrap());
-    }
-
-    res
-}
-
 pub type Epsilon = Token![_];
 
-impl Type for Epsilon {
-    type Err = Never;
-
-    fn closed(&self, _depth: usize) -> Result<(), VariableError> {
-        Ok(())
-    }
-
-    fn is_nullable(&self, _context: &mut NullContext<'_>) -> Option<bool> {
-        Some(true)
-    }
-
-    fn first_set(&self, _context: &mut FirstContext<'_>) -> Option<FirstSet> {
-        Some(FirstSet::new())
-    }
-
-    fn flast_set(&self, _context: &mut FlastContext) -> Option<FlastSet> {
-        Some(FlastSet::new())
-    }
-
-    fn well_typed(self, _context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
-        Ok((
-            Typed {
-                kind: TypeKind::Epsilon,
-                nullable: true,
-                first_set: FirstSet::new(),
-                flast_set: FlastSet::new(),
-            },
-            self.span,
-        ))
-    }
-}
-
 pub type Literal = LitStr;
-
-impl Type for Literal {
-    type Err = Never;
-
-    fn closed(&self, _depth: usize) -> Result<(), VariableError> {
-        Ok(())
-    }
-
-    fn is_nullable(&self, _context: &mut NullContext<'_>) -> Option<bool> {
-        Some(self.value().is_empty())
-    }
-
-    fn first_set(&self, _context: &mut FirstContext<'_>) -> Option<FirstSet> {
-        Some(FirstSet::of_str(&self.value()))
-    }
-
-    fn flast_set(&self, _context: &mut FlastContext) -> Option<FlastSet> {
-        Some(FlastSet::new())
-    }
-
-    fn well_typed(self, _context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
-        let value = self.value();
-        let nullable = value.is_empty();
-        let first_set = FirstSet::of_str(&value);
-        Ok((
-            Typed {
-                kind: TypeKind::Literal(value),
-                nullable,
-                first_set,
-                flast_set: FlastSet::new(),
-            },
-            self.span(),
-        ))
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct Cat {
@@ -118,93 +39,8 @@ impl Cat {
     }
 }
 
-impl Type for Cat {
-    type Err = CatError;
-
-    fn closed(&self, depth: usize) -> Result<(), VariableError> {
-        self.fst.closed(depth).and_then(|()| self.snd.closed(depth))
-    }
-
-    fn is_nullable(&self, context: &mut NullContext<'_>) -> Option<bool> {
-        Some(self.fst.is_nullable(context)? && context.unguard(|ctx| self.snd.is_nullable(ctx))?)
-    }
-
-    fn first_set(&self, context: &mut FirstContext<'_>) -> Option<FirstSet> {
-        let set = self.fst.first_set(context)?;
-
-        if self.fst.is_nullable(&mut context.as_null())? {
-            Some(set.union(context.unguard(|ctx| self.snd.first_set(ctx))?))
-        } else {
-            Some(set)
-        }
-    }
-
-    fn flast_set(&self, context: &mut FlastContext) -> Option<FlastSet> {
-        let set = context.unguard(|ctx| self.snd.flast_set(ctx))?;
-
-        if context.as_null().unguard(|ctx| self.snd.is_nullable(ctx))? {
-            Some(
-                set.union_first(context.as_first().unguard(|ctx| self.snd.first_set(ctx))?)
-                    .union(self.fst.flast_set(context)?),
-            )
-        } else {
-            Some(set)
-        }
-    }
-
-    fn well_typed(self, context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
-        let fst = self.fst;
-        let snd = self.snd;
-        let (fst, fst_span) = fst
-            .well_typed(context)
-            .map_err(|e| CatError::First(Box::new(e)))?;
-        let (snd, snd_span) = context
-            .unguard(|ctx| snd.well_typed(ctx))
-            .map_err(|e| CatError::Second(Box::new(e)))?;
-
-        if fst.is_nullable() {
-            Err(CatError::FirstNullable {
-                punct: self.punct.span,
-                fst_span,
-                fst,
-            })
-        } else if !fst.flast_set().intersect_first(&snd.first_set()).is_empty() {
-            Err(CatError::FirstFlastOverlap {
-                punct: self.punct.span,
-                fst_span,
-                fst,
-                snd_span,
-                snd,
-            })
-        } else {
-            // fst.is_nullable always false
-            let nullable = false;
-            let first_set = fst.first_set().clone();
-            let flast_set = if snd.is_nullable() {
-                snd.flast_set()
-                    .clone()
-                    .union_first(snd.first_set().clone())
-                    .union(fst.flast_set().clone())
-            } else {
-                snd.flast_set().clone()
-            };
-            Ok((
-                Typed {
-                    kind: TypeKind::Cat(Box::new(fst), Box::new(snd)),
-                    nullable,
-                    first_set,
-                    flast_set,
-                },
-                fst_span.join(snd_span).unwrap_or_else(Span::call_site),
-            ))
-        }
-    }
-}
-
 #[derive(Debug)]
 pub enum CatError {
-    First(Box<TermError>),
-    Second(Box<TermError>),
     FirstNullable {
         punct: Span,
         fst_span: Span,
@@ -222,8 +58,6 @@ pub enum CatError {
 impl From<CatError> for syn::Error {
     fn from(other: CatError) -> Self {
         match other {
-            CatError::First(e) => (*e).into(),
-            CatError::Second(e) => (*e).into(),
             CatError::FirstNullable {
                 punct, fst_span, ..
             } => {
@@ -255,16 +89,20 @@ impl From<CatError> for syn::Error {
 impl Display for CatError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::First(inner) => inner.fmt(f),
-            Self::Second(inner) => inner.fmt(f),
-            Self::FirstNullable { fst, .. } => {
-                write!(f, "term '{}' accepts the empty string", fst)
+            Self::FirstNullable { punct, fst_span, fst, .. } => {
+                let start = punct.start();
+                let fst_start = fst_span.start();
+                write!(f, "{}:{}: term '{}' ({}:{}) accepts the empty string", start.line, start.column, fst, fst_start.line, fst_start.column)
             }
-            Self::FirstFlastOverlap { fst, snd, .. } => write!(
+            Self::FirstFlastOverlap { punct, fst, fst_span, snd, snd_span, .. } => {
+                let start =punct.start();
+                let fst_start = fst_span.start();
+                let snd_start = snd_span.start();
+                write!(
                 f,
-                "cannot decide whether to repeat '{}' or start accepting '{}'.",
-                fst, snd
-            ),
+                "{}:{}: cannot decide whether to repeat '{}' ({}:{}) or start accepting '{}' ({}:{}).",
+                start.line, start.column, fst, fst_start.line, fst_start.column, snd, snd_start.line, snd_start.column
+            )},
         }
     }
 }
@@ -288,82 +126,8 @@ impl Alt {
     }
 }
 
-impl Type for Alt {
-    type Err = AltError;
-
-    fn closed(&self, depth: usize) -> Result<(), VariableError> {
-        self.left
-            .closed(depth)
-            .and_then(|()| self.right.closed(depth))
-    }
-
-    fn is_nullable(&self, context: &mut NullContext<'_>) -> Option<bool> {
-        Some(self.left.is_nullable(context)? || self.right.is_nullable(context)?)
-    }
-
-    fn first_set(&self, context: &mut FirstContext<'_>) -> Option<FirstSet> {
-        Some(
-            self.left
-                .first_set(context)?
-                .union(self.right.first_set(context)?),
-        )
-    }
-
-    fn flast_set(&self, context: &mut FlastContext) -> Option<FlastSet> {
-        Some(
-            self.left
-                .flast_set(context)?
-                .union(self.right.flast_set(context)?),
-        )
-    }
-
-    fn well_typed(self, context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
-        let (left, left_span) = self
-            .left
-            .well_typed(context)
-            .map_err(|e| AltError::Left(Box::new(e)))?;
-        let (right, right_span) = self
-            .right
-            .well_typed(context)
-            .map_err(|e| AltError::Right(Box::new(e)))?;
-
-        if left.is_nullable() && right.is_nullable() {
-            Err(AltError::BothNullable {
-                punct: self.punct.span,
-                left_span,
-                left,
-                right_span,
-                right
-            })
-        } else if !left.first_set().intersect(&right.first_set()).is_empty() {
-            Err(AltError::FirstOverlap {
-                punct: self.punct.span,
-                left_span,
-                left,
-                right_span,
-                right
-            })
-        } else {
-            let nullable = false;
-            let first_set = left.first_set().clone().union(right.first_set().clone());
-            let flast_set = left.flast_set().clone().union(right.flast_set().clone());
-            Ok((
-                Typed {
-                    kind: TypeKind::Alt(Box::new(left), Box::new(right)),
-                    nullable,
-                    first_set,
-                    flast_set,
-                },
-                left_span.join(right_span).unwrap_or_else(Span::call_site),
-            ))
-        }
-    }
-}
-
 #[derive(Debug)]
 pub enum AltError {
-    Left(Box<TermError>),
-    Right(Box<TermError>),
     BothNullable {
         punct: Span,
         left_span: Span,
@@ -383,22 +147,35 @@ pub enum AltError {
 impl From<AltError> for syn::Error {
     fn from(other: AltError) -> Self {
         match other {
-            AltError::Left(inner) => (*inner).into(),
-            AltError::Right(inner) => (*inner).into(),
             AltError::BothNullable {
-                punct, left_span, right_span, ..
+                punct,
+                left_span,
+                right_span,
+                ..
             } => {
                 let mut err = Self::new(punct, "both branches accept the empty string");
                 err.combine(Self::new(left_span, "left branch accepts the empty string"));
-                err.combine(Self::new(right_span, "right branch accepts the empty string"));
+                err.combine(Self::new(
+                    right_span,
+                    "right branch accepts the empty string",
+                ));
                 err
             }
             AltError::FirstOverlap {
-                punct, left_span, right_span, ..
+                punct,
+                left_span,
+                right_span,
+                ..
             } => {
-                let mut err = Self::new(punct, "cannot decide whether to accept the left or right branch");
+                let mut err = Self::new(
+                    punct,
+                    "cannot decide whether to accept the left or right branch",
+                );
                 err.combine(Self::new(left_span, "left branch starts with a character"));
-                err.combine(Self::new(right_span, "right branch starts with the same character"));
+                err.combine(Self::new(
+                    right_span,
+                    "right branch starts with the same character",
+                ));
                 err
             }
         }
@@ -408,14 +185,24 @@ impl From<AltError> for syn::Error {
 impl Display for AltError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Left(inner) => inner.fmt(f),
-            Self::Right(inner) => inner.fmt(f),
-            Self::BothNullable {
-                left, right, ..
-            } => write!(f, "both '{}' and '{}' accept the empty string.", left, right),
-            Self::FirstOverlap {
-                left, right, ..
-            } => write!(f, "cannot decide whether to accept '{}' or '{}'.", left, right),
+            Self::BothNullable { punct, left_span, left, right_span, right, .. } => {
+                let start = punct.start();
+                let left_start = left_span.start();
+                let right_start = right_span.start();
+                write!(
+                f,
+                "{}:{}: both '{}' ({}:{}) and '{}' ({}:{}) accept the empty string.",
+                start.line, start.column, left, left_start.line, left_start.column, right, right_start.line, right_start.column,
+            )},
+            Self::FirstOverlap { punct, left_span,left, right_span, right, .. } => {
+                let start = punct.start();
+                let left_start = left_span.start();
+                let right_start = right_span.start();
+                write!(
+                f,
+                "{}:{}: cannot decide whether to accept '{}' ({}:{}) or '{}' ({}:{}).",
+                start.line, start.column, left, left_start.line, left_start.column, right, right_start.line, right_start.column,
+            )},
         }
     }
 }
@@ -437,67 +224,20 @@ impl Fix {
             span,
         }
     }
-}
 
-impl Type for Fix {
-    type Err = TermError;
+    pub fn fixpoint<F: FnMut(&Self, &T) -> Result<T, E>, T: PartialEq, E>(
+        &self,
+        init: T,
+        mut step: F,
+    ) -> Result<T, E> {
+        let mut res = init;
+        let mut last = None;
+        while last.map(|r| r != res).unwrap_or(true) {
+            last = Some(res);
+            res = step(self, last.as_ref().unwrap())?;
+        }
 
-    fn closed(&self, depth: usize) -> Result<(), VariableError> {
-        self.inner.closed(depth + 1)
-    }
-
-    fn is_nullable(&self, context: &mut NullContext<'_>) -> Option<bool> {
-        fix(Some(false), |last| {
-            last.as_ref()
-                .copied()
-                .and_then(|null| context.push_nullable(null, |ctx| self.inner.is_nullable(ctx)))
-        })
-    }
-
-    fn first_set(&self, context: &mut FirstContext<'_>) -> Option<FirstSet> {
-        let nullable = self.is_nullable(&mut context.as_null())?;
-        fix(Some(FirstSet::new()), |last| {
-            last.as_ref().cloned().and_then(|first_set| {
-                context.push_first_set(nullable, first_set, |ctx| self.inner.first_set(ctx))
-            })
-        })
-    }
-
-    fn flast_set(&self, context: &mut FlastContext) -> Option<FlastSet> {
-        let nullable = self.is_nullable(&mut context.as_null())?;
-        let first_set = self.first_set(&mut context.as_first())?;
-        fix(Some(FlastSet::new()), |last| {
-            last.as_ref().cloned().and_then(|flast_set| {
-                context.push_flast_set(nullable, first_set.clone(), flast_set, |ctx| {
-                    self.inner.flast_set(ctx)
-                })
-            })
-        })
-    }
-
-    fn well_typed(self, context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
-        self.inner.closed(context.depth() + 1)?;
-
-        let span = self.span;
-        let nullable = self.is_nullable(&mut context.as_null()).unwrap();
-        let first_set = self.first_set(&mut context.as_first()).unwrap();
-        let flast_set = self.flast_set(context).unwrap();
-
-        context
-            .push_flast_set(nullable, first_set.clone(), flast_set.clone(), |ctx| {
-                self.inner.well_typed(ctx)
-            })
-            .map(|(inner, _)| {
-                (
-                    Typed {
-                        kind: TypeKind::Fix(Box::new(inner)),
-                        nullable,
-                        first_set,
-                        flast_set,
-                    },
-                    span,
-                )
-            })
+        Ok(res)
     }
 }
 
@@ -510,53 +250,6 @@ pub struct Variable {
 impl Variable {
     pub fn new(name: Ident, index: usize) -> Self {
         Self { name, index }
-    }
-}
-
-impl Type for Variable {
-    type Err = VariableError;
-
-    fn closed(&self, depth: usize) -> Result<(), VariableError> {
-        if self.index < depth {
-            Ok(())
-        } else {
-            Err(VariableError::FreeVariable(self.clone()))
-        }
-    }
-
-    fn is_nullable(&self, context: &mut NullContext<'_>) -> Option<bool> {
-        context.is_nullable(self.index)
-    }
-
-    fn first_set(&self, context: &mut FirstContext<'_>) -> Option<FirstSet> {
-        context.first_set(self.index).cloned()
-    }
-
-    fn flast_set(&self, context: &mut FlastContext) -> Option<FlastSet> {
-        context.flast_set(self.index).cloned()
-    }
-
-    fn well_typed(self, context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
-        self.closed(context.depth())
-            .map(|()| context.is_guarded(self.index).unwrap())
-            .and_then(|b| {
-                if b {
-                    Ok(())
-                } else {
-                    Err(VariableError::GuardedVariable(self.clone()))
-                }
-            })
-            .map(|()| {
-                (
-                    Typed {
-                        kind: TypeKind::Variable(self.index),
-                        nullable: context.is_nullable(self.index).unwrap(),
-                        first_set: context.first_set(self.index).cloned().unwrap(),
-                        flast_set: context.flast_set(self.index).cloned().unwrap(),
-                    },
-                    self.name.span(),
-                )
-            })
     }
 }
 
@@ -578,8 +271,12 @@ impl From<VariableError> for syn::Error {
 impl Display for VariableError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::FreeVariable(var) => write!(f, "unbound variable '{}'", var.name),
-            Self::GuardedVariable(var) => write!(f, "variable '{}' is guarded", var.name),
+            Self::FreeVariable(var) => {
+                let start = var.name.span().start();
+                write!(f, "{}:{}: unbound variable '{}'", start.line, start.column, var.name)},
+            Self::GuardedVariable(var) => {
+                let start = var.name.span().start();
+                write!(f, "{}:{}: variable '{}' is guarded", start.line, start.column, var.name)},
         }
     }
 }
@@ -599,31 +296,6 @@ impl Call {
     }
 }
 
-impl Type for Call {
-    type Err = Never;
-
-    fn closed(&self, _depth: usize) -> Result<(), VariableError> {
-        dbg!(&self.name);
-        todo!()
-    }
-
-    fn is_nullable(&self, _context: &mut NullContext<'_>) -> Option<bool> {
-        todo!()
-    }
-
-    fn first_set(&self, _context: &mut FirstContext<'_>) -> Option<FirstSet> {
-        todo!()
-    }
-
-    fn flast_set(&self, _context: &mut FlastContext) -> Option<FlastSet> {
-        todo!()
-    }
-
-    fn well_typed(self, _context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
-        todo!()
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum Term {
     Epsilon(Epsilon),
@@ -635,66 +307,40 @@ pub enum Term {
     Call(Call),
 }
 
-impl Type for Term {
-    type Err = TermError;
-
-    fn closed(&self, depth: usize) -> Result<(), VariableError> {
+impl Term {
+    pub fn visit<V: Visitor + ?Sized>(&self, visitor: &mut V) -> <V as Visitor>::Out {
         match self {
-            Self::Epsilon(e) => e.closed(depth),
-            Self::Literal(e) => e.closed(depth),
-            Self::Cat(e) => e.closed(depth),
-            Self::Alt(e) => e.closed(depth),
-            Self::Fix(e) => e.closed(depth),
-            Self::Variable(e) => e.closed(depth),
-            Self::Call(e) => e.closed(depth),
+            Self::Epsilon(eps) => visitor.visit_epsilon(eps),
+            Self::Literal(lit) => visitor.visit_literal(lit),
+            Self::Cat(cat) => visitor.visit_cat(cat),
+            Self::Alt(alt) => visitor.visit_alt(alt),
+            Self::Fix(fix) => visitor.visit_fix(fix),
+            Self::Variable(variable) => visitor.visit_variable(variable),
+            Self::Call(call) => visitor.visit_call(call),
         }
     }
 
-    fn is_nullable(&self, context: &mut NullContext<'_>) -> Option<bool> {
+    pub fn visit_mut<V: VisitorMut>(&mut self, visitor: &mut V) -> <V as VisitorMut>::Out {
         match self {
-            Self::Epsilon(e) => e.is_nullable(context),
-            Self::Literal(e) => e.is_nullable(context),
-            Self::Cat(e) => e.is_nullable(context),
-            Self::Alt(e) => e.is_nullable(context),
-            Self::Fix(e) => e.is_nullable(context),
-            Self::Variable(e) => e.is_nullable(context),
-            Self::Call(e) => e.is_nullable(context),
+            Self::Epsilon(eps) => visitor.visit_mut_epsilon(eps),
+            Self::Literal(lit) => visitor.visit_mut_literal(lit),
+            Self::Cat(cat) => visitor.visit_mut_cat(cat),
+            Self::Alt(alt) => visitor.visit_mut_alt(alt),
+            Self::Fix(fix) => visitor.visit_mut_fix(fix),
+            Self::Variable(variable) => visitor.visit_mut_variable(variable),
+            Self::Call(call) => visitor.visit_mut_call(call),
         }
     }
 
-    fn first_set(&self, context: &mut FirstContext<'_>) -> Option<FirstSet> {
+    pub fn fold<F: Folder>(self, folder: &mut F) -> <F as Folder>::Out {
         match self {
-            Self::Epsilon(e) => e.first_set(context),
-            Self::Literal(e) => e.first_set(context),
-            Self::Cat(e) => e.first_set(context),
-            Self::Alt(e) => e.first_set(context),
-            Self::Fix(e) => e.first_set(context),
-            Self::Variable(e) => e.first_set(context),
-            Self::Call(e) => e.first_set(context),
-        }
-    }
-
-    fn flast_set(&self, context: &mut FlastContext) -> Option<FlastSet> {
-        match self {
-            Self::Epsilon(e) => e.flast_set(context),
-            Self::Literal(e) => e.flast_set(context),
-            Self::Cat(e) => e.flast_set(context),
-            Self::Alt(e) => e.flast_set(context),
-            Self::Fix(e) => e.flast_set(context),
-            Self::Variable(e) => e.flast_set(context),
-            Self::Call(e) => e.flast_set(context),
-        }
-    }
-
-    fn well_typed(self, context: &mut FlastContext) -> Result<(Typed, Span), Self::Err> {
-        match self {
-            Self::Epsilon(e) => e.well_typed(context).map_err(TermError::from),
-            Self::Literal(e) => e.well_typed(context).map_err(TermError::from),
-            Self::Cat(e) => e.well_typed(context).map_err(TermError::from),
-            Self::Alt(e) => e.well_typed(context).map_err(TermError::from),
-            Self::Fix(e) => e.well_typed(context).map_err(TermError::from),
-            Self::Variable(e) => e.well_typed(context).map_err(TermError::from),
-            Self::Call(e) => e.well_typed(context).map_err(TermError::from),
+            Self::Epsilon(eps) => folder.fold_epsilon(eps),
+            Self::Literal(lit) => folder.fold_literal(lit),
+            Self::Cat(cat) => folder.fold_cat(cat),
+            Self::Alt(alt) => folder.fold_alt(alt),
+            Self::Fix(fix) => folder.fold_fix(fix),
+            Self::Variable(variable) => folder.fold_variable(variable),
+            Self::Call(call) => folder.fold_call(call),
         }
     }
 }
@@ -751,6 +397,459 @@ impl Display for TermError {
 }
 
 impl Error for TermError {}
+
+pub trait Visitor {
+    type Out;
+    fn visit_epsilon(&mut self, eps: &Epsilon) -> Self::Out;
+
+    fn visit_literal(&mut self, lit: &Literal) -> Self::Out;
+
+    fn visit_cat(&mut self, cat: &Cat) -> Self::Out;
+
+    fn visit_alt(&mut self, alt: &Alt) -> Self::Out;
+
+    fn visit_fix(&mut self, fix: &Fix) -> Self::Out;
+
+    fn visit_variable(&mut self, var: &Variable) -> Self::Out;
+
+    fn visit_call(&mut self, call: &Call) -> Self::Out;
+}
+
+pub trait VisitorMut {
+    type Out;
+    fn visit_mut_epsilon(&mut self, eps: &mut Epsilon) -> Self::Out;
+    fn visit_mut_literal(&mut self, lit: &mut Literal) -> Self::Out;
+    fn visit_mut_cat(&mut self, cat: &mut Cat) -> Self::Out;
+    fn visit_mut_alt(&mut self, alt: &mut Alt) -> Self::Out;
+    fn visit_mut_fix(&mut self, fix: &mut Fix) -> Self::Out;
+    fn visit_mut_variable(&mut self, var: &mut Variable) -> Self::Out;
+    fn visit_mut_call(&mut self, call: &mut Call) -> Self::Out;
+}
+
+pub trait Folder {
+    type Out;
+    fn fold_epsilon(&mut self, eps: Epsilon) -> Self::Out;
+    fn fold_literal(&mut self, lit: Literal) -> Self::Out;
+    fn fold_cat(&mut self, cat: Cat) -> Self::Out;
+    fn fold_alt(&mut self, alt: Alt) -> Self::Out;
+    fn fold_fix(&mut self, fix: Fix) -> Self::Out;
+    fn fold_variable(&mut self, var: Variable) -> Self::Out;
+    fn fold_call(&mut self, call: Call) -> Self::Out;
+}
+
+struct Closed(usize);
+
+impl Visitor for Closed {
+    type Out = bool;
+
+    fn visit_epsilon(&mut self, _eps: &Epsilon) -> Self::Out {
+        true
+    }
+
+    fn visit_literal(&mut self, _lit: &Literal) -> Self::Out {
+        true
+    }
+
+    fn visit_cat(&mut self, cat: &Cat) -> Self::Out {
+        cat.fst.visit(self) && cat.snd.visit(self)
+    }
+
+    fn visit_alt(&mut self, alt: &Alt) -> Self::Out {
+        alt.left.visit(self) && alt.right.visit(self)
+    }
+
+    fn visit_fix(&mut self, fix: &Fix) -> Self::Out {
+        self.0 += 1;
+        let res = fix.inner.visit(self);
+        self.0 -= 1;
+        res
+    }
+
+    fn visit_variable(&mut self, var: &Variable) -> Self::Out {
+        self.0 > var.index
+    }
+
+    fn visit_call(&mut self, call: &Call) -> Self::Out {
+        call.args.iter().all(|arg| arg.visit(self))
+    }
+}
+
+struct Nullable<'a>(NullContext<'a>);
+
+impl Visitor for Nullable<'_> {
+    type Out = Result<bool, VariableError>;
+
+    fn visit_epsilon(&mut self, _: &Epsilon) -> Self::Out {
+        Ok(true)
+    }
+
+    fn visit_literal(&mut self, lit: &Literal) -> Self::Out {
+        Ok(lit.value().is_empty())
+    }
+
+    fn visit_cat(&mut self, cat: &Cat) -> Self::Out {
+        if !cat.fst.visit(self)? {
+            return Ok(false);
+        }
+
+        self.0.unguard();
+        let res = cat.snd.visit(self)?;
+        self.0.guard();
+        Ok(res)
+    }
+
+    fn visit_alt(&mut self, alt: &Alt) -> Self::Out {
+        if alt.left.visit(self)? {
+            Ok(true)
+        } else {
+            alt.right.visit(self)
+        }
+    }
+
+    fn visit_fix(&mut self, fix: &Fix) -> Self::Out {
+        fix.fixpoint(false, |fix, last| {
+            self.0.push_nullable(*last);
+            let res = fix.inner.visit(self)?;
+            self.0.pop_nullable();
+            Ok(res)
+        })
+    }
+
+    fn visit_variable(&mut self, var: &Variable) -> Self::Out {
+        match self.0.is_guarded(var.index) {
+            None => Err(VariableError::FreeVariable(var.clone())),
+            Some(true) => Err(VariableError::GuardedVariable(var.clone())),
+            Some(false) => Ok(self.0.is_nullable(var.index).unwrap()),
+        }
+    }
+
+    fn visit_call(&mut self, _call: &Call) -> Self::Out {
+        todo!()
+    }
+}
+
+struct FirstSet<'a>(FirstContext<'a>);
+
+impl Visitor for FirstSet<'_> {
+    type Out = Result<typed::FirstSet, VariableError>;
+
+    fn visit_epsilon(&mut self, _: &Epsilon) -> Self::Out {
+        Ok(typed::FirstSet::new())
+    }
+
+    fn visit_literal(&mut self, lit: &Literal) -> Self::Out {
+        Ok(typed::FirstSet::of_str(&lit.value()))
+    }
+
+    fn visit_cat(&mut self, cat: &Cat) -> Self::Out {
+        let mut set = cat.fst.visit(self)?;
+
+        if cat.fst.visit(&mut Nullable(self.0.as_null()))? {
+            self.0.unguard();
+            set.union(cat.snd.visit(self)?);
+            self.0.guard();
+        }
+
+        Ok(set)
+    }
+
+    fn visit_alt(&mut self, alt: &Alt) -> Self::Out {
+        let mut set = alt.left.visit(self)?;
+        set.union(alt.right.visit(self)?);
+        Ok(set)
+    }
+
+    fn visit_fix(&mut self, fix: &Fix) -> Self::Out {
+        let nullable = Nullable(self.0.as_null()).visit_fix(fix)?;
+        fix.fixpoint(typed::FirstSet::new(), |fix, last| {
+            self.0.push_first_set(nullable, last.clone());
+            let res = fix.inner.visit(self)?;
+            self.0.pop_first_set();
+            Ok(res)
+        })
+    }
+
+    fn visit_variable(&mut self, var: &Variable) -> Self::Out {
+        match self.0.is_guarded(var.index) {
+            None => Err(VariableError::FreeVariable(var.clone())),
+            Some(true) => Err(VariableError::GuardedVariable(var.clone())),
+            Some(false) => Ok(self.0.first_set(var.index).unwrap().clone()),
+        }
+    }
+
+    fn visit_call(&mut self, _call: &Call) -> Self::Out {
+        todo!()
+    }
+}
+
+struct FlastSet<'a>(&'a mut FlastContext);
+
+impl Visitor for FlastSet<'_> {
+    type Out = Result<typed::FlastSet, VariableError>;
+
+    fn visit_epsilon(&mut self, _: &Epsilon) -> Self::Out {
+        Ok(typed::FlastSet::new())
+    }
+
+    fn visit_literal(&mut self, _: &Literal) -> Self::Out {
+        Ok(typed::FlastSet::new())
+    }
+
+    fn visit_cat(&mut self, cat: &Cat) -> Self::Out {
+        self.0.unguard();
+        let mut set = cat.snd.visit(self)?;
+        let nullable = cat.snd.visit(&mut Nullable(self.0.as_null()))?;
+        self.0.guard();
+
+        if nullable {
+            self.0.unguard();
+            set.union_first(cat.snd.visit(&mut FirstSet(self.0.as_first()))?);
+            self.0.guard();
+            set.union(cat.fst.visit(self)?);
+        }
+
+        Ok(set)
+    }
+
+    fn visit_alt(&mut self, alt: &Alt) -> Self::Out {
+        let mut set = alt.left.visit(self)?;
+        set.union(alt.right.visit(self)?);
+        Ok(set)
+    }
+
+    fn visit_fix(&mut self, fix: &Fix) -> Self::Out {
+        let nullable = Nullable(self.0.as_null()).visit_fix(fix)?;
+        let first_set = FirstSet(self.0.as_first()).visit_fix(fix)?;
+        fix.fixpoint(typed::FlastSet::new(), |fix, last| {
+            self.0
+                .push_flast_set(nullable, first_set.clone(), last.clone());
+            let res = fix.inner.visit(self)?;
+            self.0.pop_flast_set();
+            Ok(res)
+        })
+    }
+
+    fn visit_variable(&mut self, var: &Variable) -> Self::Out {
+        match self.0.is_guarded(var.index) {
+            None => Err(VariableError::FreeVariable(var.clone())),
+            Some(true) => Err(VariableError::GuardedVariable(var.clone())),
+            Some(false) => Ok(self.0.flast_set(var.index).unwrap().clone()),
+        }
+    }
+
+    fn visit_call(&mut self, _call: &Call) -> Self::Out {
+        todo!()
+    }
+}
+
+struct Spanning;
+
+impl Visitor for Spanning {
+    type Out = Span;
+
+    fn visit_epsilon(&mut self, eps: &Epsilon) -> Self::Out {
+        eps.span
+    }
+
+    fn visit_literal(&mut self, lit: &Literal) -> Self::Out {
+        lit.span()
+    }
+
+    fn visit_cat(&mut self, cat: &Cat) -> Self::Out {
+        let fst = cat.fst.visit(self);
+        let snd = cat.snd.visit(self);
+        fst.join(snd).unwrap_or_else(Span::call_site)
+    }
+
+    fn visit_alt(&mut self, alt: &Alt) -> Self::Out {
+        let left = alt.left.visit(self);
+        let right = alt.right.visit(self);
+        left.join(right).unwrap_or_else(Span::call_site)
+    }
+
+    fn visit_fix(&mut self, fix: &Fix) -> Self::Out {
+        fix.span
+    }
+
+    fn visit_variable(&mut self, var: &Variable) -> Self::Out {
+        var.name.span()
+    }
+
+    fn visit_call(&mut self, call: &Call) -> Self::Out {
+        call.span
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct TypeCheck(FlastContext);
+
+impl TypeCheck {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Folder for TypeCheck {
+    type Out = Result<(Typed, Span), TermError>;
+
+    fn fold_epsilon(&mut self, eps: Epsilon) -> Self::Out {
+        let nullable = Nullable(self.0.as_null()).visit_epsilon(&eps)?;
+        let first_set = FirstSet(self.0.as_first()).visit_epsilon(&eps)?;
+        let flast_set = FlastSet(&mut self.0).visit_epsilon(&eps)?;
+        let span = Spanning.visit_epsilon(&eps);
+        let kind = TypeKind::Epsilon;
+        Ok((
+            Typed {
+                kind,
+                nullable,
+                first_set,
+                flast_set,
+            },
+            span,
+        ))
+    }
+
+    fn fold_literal(&mut self, lit: Literal) -> Self::Out {
+        let nullable = Nullable(self.0.as_null()).visit_literal(&lit)?;
+        let first_set = FirstSet(self.0.as_first()).visit_literal(&lit)?;
+        let flast_set = FlastSet(&mut self.0).visit_literal(&lit)?;
+        let span = Spanning.visit_literal(&lit);
+        let kind = TypeKind::Literal(lit.value());
+        Ok((
+            Typed {
+                kind,
+                nullable,
+                first_set,
+                flast_set,
+            },
+            span,
+        ))
+    }
+
+    fn fold_cat(&mut self, cat: Cat) -> Self::Out {
+        let nullable = Nullable(self.0.as_null()).visit_cat(&cat)?;
+        let first_set = FirstSet(self.0.as_first()).visit_cat(&cat)?;
+        let flast_set = FlastSet(&mut self.0).visit_cat(&cat)?;
+        let span = Spanning.visit_cat(&cat);
+
+        let (fst, fst_span) = cat.fst.fold(self)?;
+
+        self.0.unguard();
+        let (snd, snd_span) = cat.snd.fold(self)?;
+        self.0.guard();
+
+        if fst.is_nullable() {
+            Err(TermError::Cat(CatError::FirstNullable {
+                punct: cat.punct.span,
+                fst_span,
+                fst,
+            }))
+        } else if !fst.flast_set().intersect_first(&snd.first_set()).is_empty() {
+            Err(TermError::Cat(CatError::FirstFlastOverlap {
+                punct: cat.punct.span,
+                fst_span,
+                fst,
+                snd_span,
+                snd,
+            }))
+        } else {
+            let kind = TypeKind::Cat(Box::new(fst), Box::new(snd));
+            Ok((
+                Typed {
+                    kind,
+                    nullable,
+                    first_set,
+                    flast_set,
+                },
+                span,
+            ))
+        }
+    }
+
+    fn fold_alt(&mut self, alt: Alt) -> Self::Out {
+        let nullable = Nullable(self.0.as_null()).visit_alt(&alt)?;
+        let first_set = FirstSet(self.0.as_first()).visit_alt(&alt)?;
+        let flast_set = FlastSet(&mut self.0).visit_alt(&alt)?;
+        let span = Spanning.visit_alt(&alt);
+
+        let (left, left_span) = alt.left.fold(self)?;
+        let (right, right_span) = alt.right.fold(self)?;
+
+        if left.is_nullable() && right.is_nullable() {
+            Err(TermError::Alt(AltError::BothNullable {
+                punct: alt.punct.span,
+                left_span,
+                left,
+                right_span,
+                right,
+            }))
+        } else if !left.first_set().intersect(&right.first_set()).is_empty() {
+            Err(TermError::Alt(AltError::FirstOverlap {
+                punct: alt.punct.span,
+                left_span,
+                left,
+                right_span,
+                right,
+            }))
+        } else {
+            let kind = TypeKind::Alt(Box::new(left), Box::new(right));
+            Ok((
+                Typed {
+                    kind,
+                    nullable,
+                    first_set,
+                    flast_set,
+                },
+                span,
+            ))
+        }
+    }
+
+    fn fold_fix(&mut self, fix: Fix) -> Self::Out {
+        let nullable = Nullable(self.0.as_null()).visit_fix(&fix)?;
+        let first_set = FirstSet(self.0.as_first()).visit_fix(&fix)?;
+        let flast_set = FlastSet(&mut self.0).visit_fix(&fix)?;
+        let span = Spanning.visit_fix(&fix);
+
+        self.0.push_flast_set(nullable, first_set.clone(), flast_set.clone());
+        let (inner, _) = fix.inner.fold(self)?;
+        self.0.pop_flast_set();
+
+        let kind = TypeKind::Fix(Box::new(inner));
+
+        Ok((
+            Typed {
+                kind,
+                nullable,
+                first_set,
+                flast_set,
+            },
+            span,
+        ))
+    }
+
+    fn fold_variable(&mut self, var: Variable) -> Self::Out {
+        let nullable = Nullable(self.0.as_null()).visit_variable(&var)?;
+        let first_set = FirstSet(self.0.as_first()).visit_variable(&var)?;
+        let flast_set = FlastSet(&mut self.0).visit_variable(&var)?;
+        let span = Spanning.visit_variable(&var);
+        let kind = TypeKind::Variable(var.index);
+
+        Ok((
+            Typed {
+                kind,
+                nullable,
+                first_set,
+                flast_set,
+            },
+            span,
+        ))
+    }
+
+    fn fold_call(&mut self, call: Call) -> Self::Out {
+        todo!()
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum TypeKind {
@@ -832,8 +931,8 @@ impl Display for TypeKind {
 pub struct Typed {
     kind: TypeKind,
     nullable: bool,
-    first_set: FirstSet,
-    flast_set: FlastSet,
+    first_set: typed::FirstSet,
+    flast_set: typed::FlastSet,
 }
 
 impl Typed {
@@ -841,11 +940,11 @@ impl Typed {
         self.nullable
     }
 
-    pub fn first_set(&self) -> &FirstSet {
+    pub fn first_set(&self) -> &typed::FirstSet {
         &self.first_set
     }
 
-    pub fn flast_set(&self) -> &FlastSet {
+    pub fn flast_set(&self) -> &typed::FlastSet {
         &self.flast_set
     }
 
@@ -942,10 +1041,10 @@ impl CodeContext {
         &mut self,
         left_code: Code,
         left_null: bool,
-        left_first: FirstSet,
+        left_first: typed::FirstSet,
         right_code: Code,
         right_null: bool,
-        right_first: FirstSet,
+        right_first: typed::FirstSet,
     ) -> Code {
         if let Some(&id) = self.alt_map.get(&(left_code.id, right_code.id)) {
             Code { id }
@@ -988,7 +1087,9 @@ impl CodeContext {
                     }
                 }
             } else {
-                let iter_first = left_first.clone().union(right_first.clone()).into_iter();
+                let mut first = left_first.clone();
+                first.union(right_first.clone());
+                let iter_first = first.into_iter();
                 let iter_left = left_first.into_iter();
                 let iter_right = right_first.into_iter();
 
