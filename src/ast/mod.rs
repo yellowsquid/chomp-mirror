@@ -89,20 +89,37 @@ impl From<CatError> for syn::Error {
 impl Display for CatError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::FirstNullable { punct, fst_span, fst, .. } => {
+            Self::FirstNullable {
+                punct,
+                fst_span,
+                fst,
+                ..
+            } => {
                 let start = punct.start();
                 let fst_start = fst_span.start();
-                write!(f, "{}:{}: term '{}' ({}:{}) accepts the empty string", start.line, start.column, fst, fst_start.line, fst_start.column)
+                write!(
+                    f,
+                    "{}:{}: term '{}' ({}:{}) accepts the empty string",
+                    start.line, start.column, fst, fst_start.line, fst_start.column
+                )
             }
-            Self::FirstFlastOverlap { punct, fst, fst_span, snd, snd_span, .. } => {
-                let start =punct.start();
+            Self::FirstFlastOverlap {
+                punct,
+                fst,
+                fst_span,
+                snd,
+                snd_span,
+                ..
+            } => {
+                let start = punct.start();
                 let fst_start = fst_span.start();
                 let snd_start = snd_span.start();
                 write!(
                 f,
                 "{}:{}: cannot decide whether to repeat '{}' ({}:{}) or start accepting '{}' ({}:{}).",
                 start.line, start.column, fst, fst_start.line, fst_start.column, snd, snd_start.line, snd_start.column
-            )},
+            )
+            }
         }
     }
 }
@@ -185,24 +202,54 @@ impl From<AltError> for syn::Error {
 impl Display for AltError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BothNullable { punct, left_span, left, right_span, right, .. } => {
+            Self::BothNullable {
+                punct,
+                left_span,
+                left,
+                right_span,
+                right,
+                ..
+            } => {
                 let start = punct.start();
                 let left_start = left_span.start();
                 let right_start = right_span.start();
                 write!(
-                f,
-                "{}:{}: both '{}' ({}:{}) and '{}' ({}:{}) accept the empty string.",
-                start.line, start.column, left, left_start.line, left_start.column, right, right_start.line, right_start.column,
-            )},
-            Self::FirstOverlap { punct, left_span,left, right_span, right, .. } => {
+                    f,
+                    "{}:{}: both '{}' ({}:{}) and '{}' ({}:{}) accept the empty string.",
+                    start.line,
+                    start.column,
+                    left,
+                    left_start.line,
+                    left_start.column,
+                    right,
+                    right_start.line,
+                    right_start.column,
+                )
+            }
+            Self::FirstOverlap {
+                punct,
+                left_span,
+                left,
+                right_span,
+                right,
+                ..
+            } => {
                 let start = punct.start();
                 let left_start = left_span.start();
                 let right_start = right_span.start();
                 write!(
-                f,
-                "{}:{}: cannot decide whether to accept '{}' ({}:{}) or '{}' ({}:{}).",
-                start.line, start.column, left, left_start.line, left_start.column, right, right_start.line, right_start.column,
-            )},
+                    f,
+                    "{}:{}: cannot decide whether to accept '{}' ({}:{}) or '{}' ({}:{}).",
+                    start.line,
+                    start.column,
+                    left,
+                    left_start.line,
+                    left_start.column,
+                    right,
+                    right_start.line,
+                    right_start.column,
+                )
+            }
         }
     }
 }
@@ -254,34 +301,44 @@ impl Variable {
 }
 
 #[derive(Debug)]
-pub enum VariableError {
-    FreeVariable(Variable),
-    GuardedVariable(Variable),
+pub enum BindingError {
+    FreeBinding(Variable),
+    GuardedBinding(Variable),
 }
 
-impl From<VariableError> for syn::Error {
-    fn from(other: VariableError) -> Self {
+impl From<BindingError> for syn::Error {
+    fn from(other: BindingError) -> Self {
         match other {
-            VariableError::FreeVariable(_) => todo!(),
-            VariableError::GuardedVariable(_) => todo!(),
+            BindingError::FreeBinding(_) => todo!(),
+            BindingError::GuardedBinding(_) => todo!(),
         }
     }
 }
 
-impl Display for VariableError {
+impl Display for BindingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::FreeVariable(var) => {
+            Self::FreeBinding(var) => {
                 let start = var.name.span().start();
-                write!(f, "{}:{}: unbound variable '{}'", start.line, start.column, var.name)},
-            Self::GuardedVariable(var) => {
+                write!(
+                    f,
+                    "{}:{}: unbound binding '{}'",
+                    start.line, start.column, var.name
+                )
+            }
+            Self::GuardedBinding(var) => {
                 let start = var.name.span().start();
-                write!(f, "{}:{}: variable '{}' is guarded", start.line, start.column, var.name)},
+                write!(
+                    f,
+                    "{}:{}: binding '{}' is guarded",
+                    start.line, start.column, var.name
+                )
+            }
         }
     }
 }
 
-impl Error for VariableError {}
+impl Error for BindingError {}
 
 #[derive(Clone, Debug)]
 pub struct Call {
@@ -303,6 +360,7 @@ pub enum Term {
     Cat(Cat),
     Alt(Alt),
     Fix(Fix),
+    Binding(Variable),
     Variable(Variable),
     Call(Call),
 }
@@ -315,7 +373,8 @@ impl Term {
             Self::Cat(cat) => visitor.visit_cat(cat),
             Self::Alt(alt) => visitor.visit_alt(alt),
             Self::Fix(fix) => visitor.visit_fix(fix),
-            Self::Variable(variable) => visitor.visit_variable(variable),
+            Self::Binding(bind) => visitor.visit_binding(bind),
+            Self::Variable(var) => visitor.visit_variable(var),
             Self::Call(call) => visitor.visit_call(call),
         }
     }
@@ -327,7 +386,8 @@ impl Term {
             Self::Cat(cat) => visitor.visit_mut_cat(cat),
             Self::Alt(alt) => visitor.visit_mut_alt(alt),
             Self::Fix(fix) => visitor.visit_mut_fix(fix),
-            Self::Variable(variable) => visitor.visit_mut_variable(variable),
+            Self::Binding(bind) => visitor.visit_mut_binding(bind),
+            Self::Variable(var) => visitor.visit_mut_variable(var),
             Self::Call(call) => visitor.visit_mut_call(call),
         }
     }
@@ -339,7 +399,8 @@ impl Term {
             Self::Cat(cat) => folder.fold_cat(cat),
             Self::Alt(alt) => folder.fold_alt(alt),
             Self::Fix(fix) => folder.fold_fix(fix),
-            Self::Variable(variable) => folder.fold_variable(variable),
+            Self::Binding(bind) => folder.fold_binding(bind),
+            Self::Variable(var) => folder.fold_variable(var),
             Self::Call(call) => folder.fold_call(call),
         }
     }
@@ -349,7 +410,7 @@ impl Term {
 pub enum TermError {
     Cat(CatError),
     Alt(AltError),
-    Variable(VariableError),
+    Binding(BindingError),
 }
 
 impl From<Never> for TermError {
@@ -370,9 +431,9 @@ impl From<AltError> for TermError {
     }
 }
 
-impl From<VariableError> for TermError {
-    fn from(other: VariableError) -> Self {
-        Self::Variable(other)
+impl From<BindingError> for TermError {
+    fn from(other: BindingError) -> Self {
+        Self::Binding(other)
     }
 }
 
@@ -381,7 +442,7 @@ impl From<TermError> for syn::Error {
         match other {
             TermError::Cat(e) => e.into(),
             TermError::Alt(e) => e.into(),
-            TermError::Variable(e) => e.into(),
+            TermError::Binding(e) => e.into(),
         }
     }
 }
@@ -391,7 +452,7 @@ impl Display for TermError {
         match self {
             Self::Cat(e) => e.fmt(f),
             Self::Alt(e) => e.fmt(f),
-            Self::Variable(e) => e.fmt(f),
+            Self::Binding(e) => e.fmt(f),
         }
     }
 }
@@ -410,6 +471,8 @@ pub trait Visitor {
 
     fn visit_fix(&mut self, fix: &Fix) -> Self::Out;
 
+    fn visit_binding(&mut self, bind: &Variable) -> Self::Out;
+
     fn visit_variable(&mut self, var: &Variable) -> Self::Out;
 
     fn visit_call(&mut self, call: &Call) -> Self::Out;
@@ -422,6 +485,7 @@ pub trait VisitorMut {
     fn visit_mut_cat(&mut self, cat: &mut Cat) -> Self::Out;
     fn visit_mut_alt(&mut self, alt: &mut Alt) -> Self::Out;
     fn visit_mut_fix(&mut self, fix: &mut Fix) -> Self::Out;
+    fn visit_mut_binding(&mut self, bind: &mut Variable) -> Self::Out;
     fn visit_mut_variable(&mut self, var: &mut Variable) -> Self::Out;
     fn visit_mut_call(&mut self, call: &mut Call) -> Self::Out;
 }
@@ -433,6 +497,7 @@ pub trait Folder {
     fn fold_cat(&mut self, cat: Cat) -> Self::Out;
     fn fold_alt(&mut self, alt: Alt) -> Self::Out;
     fn fold_fix(&mut self, fix: Fix) -> Self::Out;
+    fn fold_binding(&mut self, bind: Variable) -> Self::Out;
     fn fold_variable(&mut self, var: Variable) -> Self::Out;
     fn fold_call(&mut self, call: Call) -> Self::Out;
 }
@@ -465,8 +530,12 @@ impl Visitor for Closed {
         res
     }
 
-    fn visit_variable(&mut self, var: &Variable) -> Self::Out {
-        self.0 > var.index
+    fn visit_binding(&mut self, bind: &Variable) -> Self::Out {
+        self.0 > bind.index
+    }
+
+    fn visit_variable(&mut self, _var: &Variable) -> Self::Out {
+        true
     }
 
     fn visit_call(&mut self, call: &Call) -> Self::Out {
@@ -477,7 +546,7 @@ impl Visitor for Closed {
 struct Nullable<'a>(NullContext<'a>);
 
 impl Visitor for Nullable<'_> {
-    type Out = Result<bool, VariableError>;
+    type Out = Result<bool, BindingError>;
 
     fn visit_epsilon(&mut self, _: &Epsilon) -> Self::Out {
         Ok(true)
@@ -515,12 +584,16 @@ impl Visitor for Nullable<'_> {
         })
     }
 
-    fn visit_variable(&mut self, var: &Variable) -> Self::Out {
-        match self.0.is_guarded(var.index) {
-            None => Err(VariableError::FreeVariable(var.clone())),
-            Some(true) => Err(VariableError::GuardedVariable(var.clone())),
-            Some(false) => Ok(self.0.is_nullable(var.index).unwrap()),
+    fn visit_binding(&mut self, bind: &Variable) -> Self::Out {
+        match self.0.is_guarded(bind.index) {
+            None => Err(BindingError::FreeBinding(bind.clone())),
+            Some(true) => Err(BindingError::GuardedBinding(bind.clone())),
+            Some(false) => Ok(self.0.is_nullable(bind.index).unwrap()),
         }
+    }
+
+    fn visit_variable(&mut self, _var: &Variable) -> Self::Out {
+        todo!()
     }
 
     fn visit_call(&mut self, _call: &Call) -> Self::Out {
@@ -531,7 +604,7 @@ impl Visitor for Nullable<'_> {
 struct FirstSet<'a>(FirstContext<'a>);
 
 impl Visitor for FirstSet<'_> {
-    type Out = Result<typed::FirstSet, VariableError>;
+    type Out = Result<typed::FirstSet, BindingError>;
 
     fn visit_epsilon(&mut self, _: &Epsilon) -> Self::Out {
         Ok(typed::FirstSet::new())
@@ -569,12 +642,16 @@ impl Visitor for FirstSet<'_> {
         })
     }
 
-    fn visit_variable(&mut self, var: &Variable) -> Self::Out {
-        match self.0.is_guarded(var.index) {
-            None => Err(VariableError::FreeVariable(var.clone())),
-            Some(true) => Err(VariableError::GuardedVariable(var.clone())),
-            Some(false) => Ok(self.0.first_set(var.index).unwrap().clone()),
+    fn visit_binding(&mut self, bind: &Variable) -> Self::Out {
+        match self.0.is_guarded(bind.index) {
+            None => Err(BindingError::FreeBinding(bind.clone())),
+            Some(true) => Err(BindingError::GuardedBinding(bind.clone())),
+            Some(false) => Ok(self.0.first_set(bind.index).unwrap().clone()),
         }
+    }
+
+    fn visit_variable(&mut self, _var: &Variable) -> Self::Out {
+        todo!()
     }
 
     fn visit_call(&mut self, _call: &Call) -> Self::Out {
@@ -585,7 +662,7 @@ impl Visitor for FirstSet<'_> {
 struct FlastSet<'a>(&'a mut FlastContext);
 
 impl Visitor for FlastSet<'_> {
-    type Out = Result<typed::FlastSet, VariableError>;
+    type Out = Result<typed::FlastSet, BindingError>;
 
     fn visit_epsilon(&mut self, _: &Epsilon) -> Self::Out {
         Ok(typed::FlastSet::new())
@@ -629,12 +706,16 @@ impl Visitor for FlastSet<'_> {
         })
     }
 
-    fn visit_variable(&mut self, var: &Variable) -> Self::Out {
-        match self.0.is_guarded(var.index) {
-            None => Err(VariableError::FreeVariable(var.clone())),
-            Some(true) => Err(VariableError::GuardedVariable(var.clone())),
-            Some(false) => Ok(self.0.flast_set(var.index).unwrap().clone()),
+    fn visit_binding(&mut self, bind: &Variable) -> Self::Out {
+        match self.0.is_guarded(bind.index) {
+            None => Err(BindingError::FreeBinding(bind.clone())),
+            Some(true) => Err(BindingError::GuardedBinding(bind.clone())),
+            Some(false) => Ok(self.0.flast_set(bind.index).unwrap().clone()),
         }
+    }
+
+    fn visit_variable(&mut self, _var: &Variable) -> Self::Out {
+        todo!()
     }
 
     fn visit_call(&mut self, _call: &Call) -> Self::Out {
@@ -669,6 +750,10 @@ impl Visitor for Spanning {
 
     fn visit_fix(&mut self, fix: &Fix) -> Self::Out {
         fix.span
+    }
+
+    fn visit_binding(&mut self, var: &Variable) -> Self::Out {
+        var.name.span()
     }
 
     fn visit_variable(&mut self, var: &Variable) -> Self::Out {
@@ -811,7 +896,8 @@ impl Folder for TypeCheck {
         let flast_set = FlastSet(&mut self.0).visit_fix(&fix)?;
         let span = Spanning.visit_fix(&fix);
 
-        self.0.push_flast_set(nullable, first_set.clone(), flast_set.clone());
+        self.0
+            .push_flast_set(nullable, first_set.clone(), flast_set.clone());
         let (inner, _) = fix.inner.fold(self)?;
         self.0.pop_flast_set();
 
@@ -828,12 +914,12 @@ impl Folder for TypeCheck {
         ))
     }
 
-    fn fold_variable(&mut self, var: Variable) -> Self::Out {
-        let nullable = Nullable(self.0.as_null()).visit_variable(&var)?;
-        let first_set = FirstSet(self.0.as_first()).visit_variable(&var)?;
-        let flast_set = FlastSet(&mut self.0).visit_variable(&var)?;
-        let span = Spanning.visit_variable(&var);
-        let kind = TypeKind::Variable(var.index);
+    fn fold_binding(&mut self, bind: Variable) -> Self::Out {
+        let nullable = Nullable(self.0.as_null()).visit_binding(&bind)?;
+        let first_set = FirstSet(self.0.as_first()).visit_binding(&bind)?;
+        let flast_set = FlastSet(&mut self.0).visit_binding(&bind)?;
+        let span = Spanning.visit_binding(&bind);
+        let kind = TypeKind::Binding(bind.index);
 
         Ok((
             Typed {
@@ -846,10 +932,296 @@ impl Folder for TypeCheck {
         ))
     }
 
-    fn fold_call(&mut self, call: Call) -> Self::Out {
+    fn fold_variable(&mut self, _var: Variable) -> Self::Out {
+        todo!()
+    }
+
+    fn fold_call(&mut self, _call: Call) -> Self::Out {
         todo!()
     }
 }
+
+struct DeepenVars(usize);
+
+impl VisitorMut for DeepenVars {
+    type Out = ();
+
+    fn visit_mut_epsilon(&mut self, _: &mut Epsilon) -> Self::Out {}
+
+    fn visit_mut_literal(&mut self, _: &mut Literal) -> Self::Out {}
+
+    fn visit_mut_cat(&mut self, cat: &mut Cat) -> Self::Out {
+        cat.fst.visit_mut(self);
+        cat.snd.visit_mut(self);
+    }
+
+    fn visit_mut_alt(&mut self, alt: &mut Alt) -> Self::Out {
+        alt.left.visit_mut(self);
+        alt.right.visit_mut(self);
+    }
+
+    fn visit_mut_fix(&mut self, fix: &mut Fix) -> Self::Out {
+        self.0 += 1;
+        fix.inner.visit_mut(self);
+        self.0 -= 1;
+    }
+
+    fn visit_mut_binding(&mut self, bind: &mut Variable) -> Self::Out {
+        if bind.index >= self.0 {
+            bind.index += 1;
+        }
+    }
+
+    fn visit_mut_variable(&mut self, _: &mut Variable) -> Self::Out {}
+
+    fn visit_mut_call(&mut self, call: &mut Call) -> Self::Out {
+        for arg in &mut call.args {
+            arg.visit_mut(self);
+        }
+    }
+}
+
+struct ShallowVars(usize);
+
+impl VisitorMut for ShallowVars {
+    type Out = ();
+
+    fn visit_mut_epsilon(&mut self, _: &mut Epsilon) -> Self::Out {}
+
+    fn visit_mut_literal(&mut self, _: &mut Literal) -> Self::Out {}
+
+    fn visit_mut_cat(&mut self, cat: &mut Cat) -> Self::Out {
+        cat.fst.visit_mut(self);
+        cat.snd.visit_mut(self);
+    }
+
+    fn visit_mut_alt(&mut self, alt: &mut Alt) -> Self::Out {
+        alt.left.visit_mut(self);
+        alt.right.visit_mut(self);
+    }
+
+    fn visit_mut_fix(&mut self, fix: &mut Fix) -> Self::Out {
+        self.0 += 1;
+        fix.inner.visit_mut(self);
+        self.0 -= 1;
+    }
+
+    fn visit_mut_binding(&mut self, bind: &mut Variable) -> Self::Out {
+        if bind.index > self.0 {
+            bind.index -= 1;
+        }
+    }
+
+    fn visit_mut_variable(&mut self, _: &mut Variable) -> Self::Out {
+        todo!()
+    }
+
+    fn visit_mut_call(&mut self, call: &mut Call) -> Self::Out {
+        for arg in &mut call.args {
+            arg.visit_mut(self);
+        }
+    }
+}
+
+struct Substitute(Vec<Term>);
+
+impl Folder for Substitute {
+    type Out = Result<Term, SubstituteError>;
+
+    fn fold_epsilon(&mut self, eps: Epsilon) -> Self::Out {
+        Ok(Term::Epsilon(eps))
+    }
+
+    fn fold_literal(&mut self, lit: Literal) -> Self::Out {
+        Ok(Term::Literal(lit))
+    }
+
+    fn fold_cat(&mut self, cat: Cat) -> Self::Out {
+        let fst = cat.fst.fold(self)?;
+        let snd = cat.snd.fold(self)?;
+        Ok(Term::Cat(Cat {
+            fst: Box::new(fst),
+            punct: cat.punct,
+            snd: Box::new(snd),
+        }))
+    }
+
+    fn fold_alt(&mut self, alt: Alt) -> Self::Out {
+        let left = alt.left.fold(self)?;
+        let right = alt.right.fold(self)?;
+        Ok(Term::Alt(Alt {
+            left: Box::new(left),
+            punct: alt.punct,
+            right: Box::new(right),
+        }))
+    }
+
+    fn fold_fix(&mut self, fix: Fix) -> Self::Out {
+        for var in &mut self.0 {
+            var.visit_mut(&mut DeepenVars(0));
+        }
+        let inner = fix.inner.fold(self)?;
+        for var in &mut self.0 {
+            var.visit_mut(&mut ShallowVars(0));
+        }
+        Ok(Term::Fix(Fix {
+            span: fix.span,
+            arg: fix.arg,
+            inner: Box::new(inner),
+        }))
+    }
+
+    fn fold_binding(&mut self, var: Variable) -> Self::Out {
+        Ok(Term::Binding(var))
+    }
+
+    fn fold_call(&mut self, call: Call) -> Self::Out {
+        let args = call
+            .args
+            .into_iter()
+            .map(|arg| arg.fold(self))
+            .collect::<Result<_, _>>()?;
+        Ok(Term::Call(Call {
+            span: call.span,
+            name: call.name,
+            args,
+        }))
+    }
+
+    fn fold_variable(&mut self, var: Variable) -> Self::Out {
+        self.0
+            .get(var.index)
+            .cloned()
+            .ok_or(SubstituteError::FreeVariable(var))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct InlineCall {
+    name: String,
+    term: Term,
+    args: usize,
+}
+
+impl InlineCall {
+    pub fn new(name: Ident, term: Term, args: usize) -> Self {
+        Self {
+            name: name.to_string(),
+            term,
+            args,
+        }
+    }
+}
+
+impl Folder for InlineCall {
+    type Out = Result<Term, SubstituteError>;
+
+    fn fold_epsilon(&mut self, eps: Epsilon) -> Self::Out {
+        Ok(Term::Epsilon(eps))
+    }
+
+    fn fold_literal(&mut self, lit: Literal) -> Self::Out {
+        Ok(Term::Literal(lit))
+    }
+
+    fn fold_cat(&mut self, cat: Cat) -> Self::Out {
+        let fst = cat.fst.fold(self)?;
+        let snd = cat.snd.fold(self)?;
+        Ok(Term::Cat(Cat {
+            fst: Box::new(fst),
+            punct: cat.punct,
+            snd: Box::new(snd),
+        }))
+    }
+
+    fn fold_alt(&mut self, alt: Alt) -> Self::Out {
+        let left = alt.left.fold(self)?;
+        let right = alt.right.fold(self)?;
+        Ok(Term::Alt(Alt {
+            left: Box::new(left),
+            punct: alt.punct,
+            right: Box::new(right),
+        }))
+    }
+
+    fn fold_fix(&mut self, fix: Fix) -> Self::Out {
+        let inner = fix.inner.fold(self)?;
+        Ok(Term::Fix(Fix {
+            span: fix.span,
+            arg: fix.arg,
+            inner: Box::new(inner),
+        }))
+    }
+
+    fn fold_binding(&mut self, bind: Variable) -> Self::Out {
+        Ok(Term::Binding(bind))
+    }
+
+    fn fold_variable(&mut self, var: Variable) -> Self::Out {
+        Ok(Term::Variable(var))
+    }
+
+    fn fold_call(&mut self, call: Call) -> Self::Out {
+        if call.name != self.name {
+            let args = call
+                .args
+                .into_iter()
+                .map(|arg| arg.fold(self))
+                .collect::<Result<_, _>>()?;
+            Ok(Term::Call(Call {
+                span: call.span,
+                name: call.name,
+                args,
+            }))
+        } else if call.args.len() != self.args {
+            Err(SubstituteError::WrongArgCount {
+                call,
+                expected: self.args,
+            })
+        } else {
+            let args = call
+                .args
+                .into_iter()
+                .map(|arg| arg.fold(self))
+                .collect::<Result<_, _>>()?;
+            self.term.clone().fold(&mut Substitute(args))
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum SubstituteError {
+    FreeVariable(Variable),
+    WrongArgCount { call: Call, expected: usize },
+}
+
+impl Display for SubstituteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FreeVariable(var) => {
+                let start = var.name.span().start();
+                write!(
+                    f,
+                    "{}:{}: undeclared variable '{}'",
+                    start.line, start.column, var.name
+                )
+            }
+            SubstituteError::WrongArgCount { call, expected } => {
+                let start = call.span.start();
+                write!(
+                    f,
+                    "{}:{}: wrong number of arguments. Expected {}, got {}",
+                    start.line,
+                    start.column,
+                    call.args.len(),
+                    expected
+                )
+            }
+        }
+    }
+}
+
+impl Error for SubstituteError {}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum TypeKind {
@@ -858,7 +1230,7 @@ enum TypeKind {
     Cat(Box<Typed>, Box<Typed>),
     Alt(Box<Typed>, Box<Typed>),
     Fix(Box<Typed>),
-    Variable(usize),
+    Binding(usize),
 }
 
 #[derive(Debug)]
@@ -909,7 +1281,7 @@ impl TypeKind {
                 } = *inner;
                 context.fix(inner_kind)
             }
-            Self::Variable(index) => context.variable(index),
+            Self::Binding(index) => context.variable(index),
         }
     }
 }
@@ -922,7 +1294,7 @@ impl Display for TypeKind {
             Self::Cat(fst, snd) => write!(f, "{}.{}", fst, snd),
             Self::Alt(left, right) => write!(f, "({} | {})", left, right),
             Self::Fix(inner) => write!(f, "[]({})", inner),
-            Self::Variable(index) => write!(f, "{}", index),
+            Self::Binding(index) => write!(f, "{}", index),
         }
     }
 }

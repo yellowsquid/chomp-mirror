@@ -1,7 +1,3 @@
-use proc_macro2::Span;
-
-use super::Typed;
-use super::VariableError;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
@@ -190,8 +186,8 @@ impl FirstContext<'_> {
 
 #[derive(Debug, Default)]
 pub struct FlastContext {
-    data: Vec<(bool, FirstSet, FlastSet)>,
-    guard: Vec<usize>,
+    binds: Vec<(bool, FirstSet, FlastSet)>,
+    unguard_points: Vec<usize>,
 }
 
 impl FlastContext {
@@ -200,16 +196,16 @@ impl FlastContext {
     }
 
     pub fn depth(&self) -> usize {
-        self.data.len()
+        self.binds.len()
     }
 
     pub fn is_guarded(&self, index: usize) -> Option<bool> {
-        if self.data.len() <= index {
+        if self.binds.len() <= index {
             None
-        } else if self.guard.is_empty() {
+        } else if self.unguard_points.is_empty() {
             Some(true)
         } else {
-            Some(self.guard[self.guard.len() - 1] + index < self.data.len())
+            Some(self.unguard_points[self.unguard_points.len() - 1] + index < self.binds.len())
         }
     }
 
@@ -221,40 +217,40 @@ impl FlastContext {
     }
 
     pub(crate) fn unguard(&mut self) {
-        self.guard.push(self.data.len());
+        self.unguard_points.push(self.binds.len());
     }
 
     pub(crate) fn guard(&mut self) {
-        self.guard.pop();
+        self.unguard_points.pop();
     }
 
     fn is_nullable(&self, index: usize) -> Option<bool> {
-        self.data.get(index).map(|(null, _, _)| *null)
+        self.binds.get(index).map(|(null, _, _)| *null)
     }
 
     fn push_nullable(&mut self, nullable: bool) {
-        self.data
+        self.binds
             .push((nullable, FirstSet::default(), FlastSet::default()))
     }
 
     fn pop_nullable(&mut self) {
-        self.data.pop();
+        self.binds.pop();
     }
 
     fn first_set(&self, index: usize) -> Option<&FirstSet> {
-        self.data.get(index).map(|(_, first, _)| first)
+        self.binds.get(index).map(|(_, first, _)| first)
     }
 
     fn push_first_set(&mut self, nullable: bool, first_set: FirstSet) {
-        self.data.push((nullable, first_set, FlastSet::default()))
+        self.binds.push((nullable, first_set, FlastSet::default()))
     }
 
     fn pop_first_set(&mut self) {
-        self.data.pop();
+        self.binds.pop();
     }
 
     pub fn flast_set(&self, index: usize) -> Option<&FlastSet> {
-        self.data.get(index).map(|(_, _, flast)| flast)
+        self.binds.get(index).map(|(_, _, flast)| flast)
     }
 
     pub fn with_flast_set<F: FnOnce(&mut Self) -> R, R>(
@@ -271,11 +267,11 @@ impl FlastContext {
     }
 
     pub(crate) fn push_flast_set(&mut self, nullable: bool, first_set: FirstSet, flast_set: FlastSet) {
-        self.data.push((nullable, first_set, flast_set));
+        self.binds.push((nullable, first_set, flast_set));
     }
 
     pub(crate) fn pop_flast_set(&mut self) {
-        self.data.pop();
+        self.binds.pop();
     }
 
     pub fn as_first(&mut self) -> FirstContext<'_> {
@@ -285,32 +281,4 @@ impl FlastContext {
     pub fn as_null(&mut self) -> NullContext<'_> {
         NullContext { inner: self }
     }
-}
-
-pub trait Type {
-    type Err: Into<syn::Error>;
-
-    /// # Errors
-    /// Returns [`Err`] if there is a variable with an index greater than or equal
-    /// to `depth`.
-    fn closed(&self, depth: usize) -> Result<(), VariableError>;
-
-    /// # Errors
-    /// Returns [`None`] only if `self.closed(context.get_depth())` returns an
-    /// [`Err`].
-    fn is_nullable(&self, context: &mut NullContext<'_>) -> Option<bool>;
-
-    /// # Errors
-    /// Returns [`None`] only if `self.closed(context.get_depth())` returns an
-    /// [`Err`].
-    fn first_set(&self, context: &mut FirstContext<'_>) -> Option<FirstSet>;
-
-    /// # Errors
-    /// Returns [`None`] only if `self.closed(context.get_depth())` returns an
-    /// [`Err`].
-    fn flast_set(&self, context: &mut FlastContext) -> Option<FlastSet>;
-
-    /// # Errors
-    /// Returns an [`Err`] if this term is not well typed.
-    fn well_typed(self, context: &mut FlastContext) -> Result<(Typed, Span), Self::Err>;
 }

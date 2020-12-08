@@ -1,3 +1,4 @@
+use chomp::ast::InlineCall;
 use chomp::{ast::TypeCheck, nibble::File};
 use proc_macro2::Span;
 use std::{
@@ -14,9 +15,16 @@ fn main() {
         .map_err(|e| Box::new(e) as Box<dyn Error>)
         .and_then(|_| syn::parse_str(&input).map_err(|e| Box::new(e) as Box<dyn Error>))
         .and_then(|nibble: File| {
-            dbg!(nibble
-                .convert_with_substitution())
-                .fold(&mut TypeCheck::new())
+            let (funs, goal) = nibble.convert();
+
+            funs.into_iter()
+                .try_rfold(goal, |goal, (name, term, args)| {
+                    goal.fold(&mut InlineCall::new(name, term, args))
+                })
+                .map_err(|e| Box::new(e) as Box<dyn Error>)
+        })
+        .and_then(|term| {
+            term.fold(&mut TypeCheck::new())
                 .map_err(|e| Box::new(e) as Box<dyn Error>)
         })
         .map(|(typed, _)| typed.emit_code(Ident::new("Ast", Span::call_site())))

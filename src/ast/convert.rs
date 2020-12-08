@@ -1,32 +1,28 @@
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::mem;
-use std::rc::Rc;
 
 use super::Term;
 
 #[derive(Debug, Default)]
+/// The variable context for converting a concrete syntax tree to an abstract
+/// one.
+///
+/// There are two name scopes in a context. Bindings are used by fixed points.
+/// Variables are formal parameters of macros.
 pub struct Context {
     bindings: Vec<String>,
-    variables: HashMap<String, Term>,
-    functions: HashMap<String, (Rc<dyn Convert>, Vec<String>)>,
+    variables: HashMap<String, usize>,
 }
 
 impl Context {
-    /// # Examples
-    /// ```
-    /// use chomp::ast::convert::Context;
-    ///
-    /// let context = Context::new();
-    /// assert_eq!(context.get("x"), None);
-    /// assert_eq!(context.get("y"), None);
-    /// assert_eq!(context.get("z"), None);
-    /// ```
+    /// Creates a new variable context. No names are bound.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Returns [`Some`] index of a binding `name`.
+    ///
     /// # Errors
     /// Returns [`None`] if `name.is_empty()` or if `name` is unbound.
     ///
@@ -34,18 +30,18 @@ impl Context {
     /// ```
     /// use chomp::ast::convert::Context;
     ///
-    /// let context = Context::new();
-    /// assert_eq!(context.get("x"), None);
+    /// let mut context = Context::new();
+    /// assert_eq!(context.get_binding("x"), None);
     ///
-    /// context.push("x".to_owned(), |c| {
-    ///     assert_eq!(c.get("x"), Some(0));
+    /// context.with_binding("x".to_owned(), |c| {
+    ///     assert_eq!(c.get_binding("x"), Some(0));
     ///
-    ///     c.push("y".to_owned(), |c| {
-    ///         assert_eq!(c.get("x"), Some(1));
+    ///     c.with_binding("y".to_owned(), |c| {
+    ///         assert_eq!(c.get_binding("x"), Some(1));
     ///     })
     /// });
     ///
-    /// assert_eq!(context.get("x"), None);
+    /// assert_eq!(context.get_binding("x"), None);
     /// ```
     pub fn get_binding<T: ?Sized + PartialEq<str>>(&self, name: &T) -> Option<usize> {
         let mut iter = self.bindings.iter();
@@ -66,6 +62,8 @@ impl Context {
         None
     }
 
+    /// Adds a binding `name` for the duration of the function `f`.
+    ///
     /// # Panics
     /// If `name.is_empty()`.
     ///
@@ -73,16 +71,16 @@ impl Context {
     /// ```
     /// use chomp::ast::convert::Context;
     ///
-    /// let context = Context::new();
-    /// assert_eq!(context.get("x"), None);
+    /// let mut context = Context::new();
+    /// assert_eq!(context.get_binding("x"), None);
     ///
-    /// context.push("x".to_owned(), |c| {
-    ///     assert_eq!(c.get("x"), Some(0));
+    /// context.with_binding("x".to_owned(), |c| {
+    ///     assert_eq!(c.get_binding("x"), Some(0));
     /// });
     ///
-    /// assert_eq!(context.get("x"), None);
+    /// assert_eq!(context.get_binding("x"), None);
     /// ```
-    pub fn push_binding<F: FnOnce(&mut Self) -> T, T>(&mut self, name: String, f: F) -> T {
+    pub fn with_binding<F: FnOnce(&mut Self) -> T, T>(&mut self, name: String, f: F) -> T {
         if name.is_empty() {
             panic!()
         }
@@ -93,86 +91,63 @@ impl Context {
         res
     }
 
+    /// Returns [`Some`] index of a variable `name`.
+    ///
     /// # Errors
     /// If `name == "".to_owned().borrow()` or `name` is unbound.
-    pub fn get_variable<T: ?Sized + Hash + Eq>(&self, name: &T) -> Option<&Term>
+    ///
+    /// # Examples
+    /// ```
+    /// use chomp::ast::convert::Context;
+    ///
+    /// let mut ctx = Context::new();
+    /// assert_eq!(ctx.get_variable("x"), None);
+    ///
+    /// ctx.set_variables(vec!["x".to_owned(), "y".to_owned()]);
+    /// assert_eq!(ctx.get_variable("x"), Some(0));
+    /// assert_eq!(ctx.get_variable("y"), Some(1));
+    ///
+    /// ctx.set_variables(vec![]);
+    /// assert_eq!(ctx.get_variable("x"), None);
+    /// ```
+    pub fn get_variable<T: ?Sized + Hash + Eq>(&self, name: &T) -> Option<usize>
     where
         String: Borrow<T>,
     {
         if name == "".to_owned().borrow() {
-            return None
+            return None;
         }
 
-        self.variables.get(name)
+        self.variables.get(name).copied()
     }
 
-    /// # Panics
-    /// If any variable name is empty.
-    pub fn add_function(&mut self, name: String, source: Rc<dyn Convert>, variables: Vec<String>) {
-        if variables.iter().any(|s| s.is_empty()) {
-            panic!()
-        }
-
-        self.functions.insert(name, (source, variables));
-    }
-
-    /// This uses dynamic scope for bindings.
-    /// # Errors
-    /// If `name` is unbound or has been called with the wrong number of arguments.
-    pub fn call_function<I: IntoIterator<Item = Term>, T: ?Sized + Hash + Eq>(
-        &mut self,
-        name: &T,
-        args: I,
-        convert_mode: ConvertMode,
-    ) -> Option<Term>
-    where
-        String: Borrow<T>,
-        <I as IntoIterator>::IntoIter: ExactSizeIterator,
-    {
-        let (term, vars) = self.functions.get(name)?;
-        let args_iter = args.into_iter();
-
-        if vars.len() != args_iter.len() {
-            None
-        } else {
-            let mut old = Vec::new();
-            for (var, value) in vars.clone().into_iter().zip(args_iter) {
-                if let Some((old_name, old_value)) = self.variables.remove_entry(var.borrow()) {
-                    let mut indices = Vec::new();
-
-                    for (index, binding) in self.bindings.iter_mut().enumerate() {
-                        if *binding == old_name {
-                            indices.push((index, mem::take(binding)));
-                        }
-                    }
-
-                    old.push((old_name, old_value, indices))
-                }
-
-                self.variables.insert(var, value);
-            }
-
-            let res = Some(term.clone().convert(self, convert_mode));
-
-            for (name, value, indices) in old {
-                for (index, binding) in indices {
-                    self.bindings[index] = binding
-                }
-
-                self.variables.insert(name, value);
-            }
-
-            res
-        }
+    /// Reassigns all variable indices based off of their position in `args`.
+    ///
+    /// # Examples
+    /// ```
+    /// use chomp::ast::convert::Context;
+    ///
+    /// let mut ctx = Context::new();
+    /// assert_eq!(ctx.get_variable("x"), None);
+    ///
+    /// ctx.set_variables(vec!["x".to_owned(), "y".to_owned()]);
+    /// assert_eq!(ctx.get_variable("x"), Some(0));
+    /// assert_eq!(ctx.get_variable("y"), Some(1));
+    ///
+    /// ctx.set_variables(vec![]);
+    /// assert_eq!(ctx.get_variable("x"), None);
+    /// ```
+    pub fn set_variables<I: IntoIterator<Item = String>>(&mut self, args: I) {
+        self.variables = args
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| (name, index))
+            .collect();
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ConvertMode {
-    NoSubstitution,
-    WithSubstitution,
-}
-
-pub trait Convert: std::fmt::Debug {
-    fn convert(&self, context: &mut Context, mode: ConvertMode) -> Term;
+/// Used to convert a concrete term into an abstract term.
+pub trait Convert {
+    /// Performs the conversion.
+    fn convert(&self, context: &mut Context) -> Term;
 }
