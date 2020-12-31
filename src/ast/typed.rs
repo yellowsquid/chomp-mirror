@@ -225,7 +225,7 @@ impl FlastContext {
     }
 
     fn is_nullable(&self, index: usize) -> Option<bool> {
-        self.binds.get(index).map(|(null, _, _)| *null)
+        self.binds.get(self.binds.len() - index - 1).map(|(null, _, _)| *null)
     }
 
     fn push_nullable(&mut self, nullable: bool) {
@@ -238,7 +238,7 @@ impl FlastContext {
     }
 
     fn first_set(&self, index: usize) -> Option<&FirstSet> {
-        self.binds.get(index).map(|(_, first, _)| first)
+        self.binds.get(self.binds.len() - index - 1).map(|(_, first, _)| first)
     }
 
     fn push_first_set(&mut self, nullable: bool, first_set: FirstSet) {
@@ -250,7 +250,7 @@ impl FlastContext {
     }
 
     pub fn flast_set(&self, index: usize) -> Option<&FlastSet> {
-        self.binds.get(index).map(|(_, _, flast)| flast)
+        self.binds.get(self.binds.len() - index - 1).map(|(_, _, flast)| flast)
     }
 
     pub fn with_flast_set<F: FnOnce(&mut Self) -> R, R>(

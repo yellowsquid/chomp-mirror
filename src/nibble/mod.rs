@@ -407,14 +407,16 @@ impl Parse for LetStatement {
 pub struct Goal {
     match_token: Token![match],
     expr: Expression,
+    semi_token: Token![;],
 }
 
 impl Parse for Goal {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         let match_token = input.parse()?;
         let expr = input.parse()?;
+        let semi_token = input.parse()?;
 
-        Ok(Self { match_token, expr })
+        Ok(Self { match_token, expr, semi_token })
     }
 }
 

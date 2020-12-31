@@ -9,19 +9,13 @@ use syn::{Ident, LitStr, Token};
 pub mod convert;
 pub mod typed;
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum Never {}
-
-impl From<Never> for syn::Error {
-    fn from(other: Never) -> Self {
-        match other {}
-    }
-}
-
+/// A literal epsilon.
 pub type Epsilon = Token![_];
 
+/// A literal string.
 pub type Literal = LitStr;
 
+/// The concatenation of two terms.
 #[derive(Clone, Debug)]
 pub struct Cat {
     fst: Box<Term>,
@@ -30,6 +24,7 @@ pub struct Cat {
 }
 
 impl Cat {
+    /// Creates a new `Cat` from the two sub-terms and the joining punctuation.
     pub fn new(fst: Term, punct: Token![.], snd: Term) -> Self {
         Self {
             fst: Box::new(fst),
@@ -39,18 +34,29 @@ impl Cat {
     }
 }
 
+/// A type error when concatenating two terms.
 #[derive(Debug)]
 pub enum CatError {
+    /// The first term was unexpectedly nullable.
     FirstNullable {
+        /// The punctuation of the concatenation.
         punct: Span,
+        /// The span of the first term.
         fst_span: Span,
+        /// The first term.
         fst: Typed,
     },
+    /// The flast set of the first term intersects the first set of the second.
     FirstFlastOverlap {
+        /// The punctuation of the concatenation.
         punct: Span,
+        /// The span of the first term.
         fst_span: Span,
+        /// The first term.
         fst: Typed,
+        /// The span of the second term.
         snd_span: Span,
+        /// The second term.
         snd: Typed,
     },
 }
@@ -126,6 +132,7 @@ impl Display for CatError {
 
 impl Error for CatError {}
 
+/// An alternation of two terms.
 #[derive(Clone, Debug)]
 pub struct Alt {
     left: Box<Term>,
@@ -134,6 +141,7 @@ pub struct Alt {
 }
 
 impl Alt {
+    /// Creates a new `Alt` from the two terms and the joining punctuation.
     pub fn new(left: Term, punct: Token![|], right: Term) -> Self {
         Self {
             left: Box::new(left),
@@ -143,20 +151,33 @@ impl Alt {
     }
 }
 
+/// A type error when alternating two terms.
 #[derive(Debug)]
 pub enum AltError {
+    /// Both terms are nullable.
     BothNullable {
+        /// The punctuation of the alternation.
         punct: Span,
+        /// The span of the left term.
         left_span: Span,
+        /// The left term.
         left: Typed,
+        /// The span of the right term.
         right_span: Span,
+        /// The right term.
         right: Typed,
     },
+    /// The first sets of the two terms intersect.
     FirstOverlap {
+        /// The punctuation of the alternation.
         punct: Span,
+        /// The span of the left term.
         left_span: Span,
+        /// The left term.
         left: Typed,
+        /// The span of the right term.
         right_span: Span,
+        /// The right term.
         right: Typed,
     },
 }
@@ -256,6 +277,7 @@ impl Display for AltError {
 
 impl Error for AltError {}
 
+/// The least fixed point of a term.
 #[derive(Clone, Debug)]
 pub struct Fix {
     span: Span,
@@ -264,6 +286,7 @@ pub struct Fix {
 }
 
 impl Fix {
+    /// Creates a new `Fix` from the argument name, inner term and overall span.
     pub fn new(arg: Ident, inner: Term, span: Span) -> Self {
         Self {
             arg,
@@ -272,12 +295,13 @@ impl Fix {
         }
     }
 
-    pub fn fixpoint<F: FnMut(&Self, &T) -> Result<T, E>, T: PartialEq, E>(
+    /// Iteratively computes the least fixed point of a function from an initial
+    /// state.
+    pub fn fixpoint<F: FnMut(&Self, &T) -> Result<T, E>, T: Default + PartialEq, E>(
         &self,
-        init: T,
         mut step: F,
     ) -> Result<T, E> {
-        let mut res = init;
+        let mut res = T::default();
         let mut last = None;
         while last.map(|r| r != res).unwrap_or(true) {
             last = Some(res);
@@ -288,6 +312,7 @@ impl Fix {
     }
 }
 
+/// A variable usage
 #[derive(Clone, Debug)]
 pub struct Variable {
     name: Ident,
@@ -295,14 +320,18 @@ pub struct Variable {
 }
 
 impl Variable {
+    /// Creates a new `Variable` from the name and index.
     pub fn new(name: Ident, index: usize) -> Self {
         Self { name, index }
     }
 }
 
+/// A type error when using a fix point variable.
 #[derive(Debug)]
 pub enum BindingError {
+    /// Usage of a free binding variable.
     FreeBinding(Variable),
+    /// Usage of a guarded binding variable.
     GuardedBinding(Variable),
 }
 
@@ -340,6 +369,7 @@ impl Display for BindingError {
 
 impl Error for BindingError {}
 
+/// A macro invocation.
 #[derive(Clone, Debug)]
 pub struct Call {
     span: Span,
@@ -348,24 +378,35 @@ pub struct Call {
 }
 
 impl Call {
+    /// Create a new `Call` from the macro name, actual parameters and overall span.
     pub fn new(name: Ident, args: Vec<Term>, span: Span) -> Self {
         Self { name, args, span }
     }
 }
 
+/// An abstract Nibble term.
 #[derive(Clone, Debug)]
 pub enum Term {
+    /// Matches the empty string.
     Epsilon(Epsilon),
+    /// Matches the literal string.
     Literal(Literal),
+    /// Matches one term followed by another.
     Cat(Cat),
+    /// Matches either one term or another.
     Alt(Alt),
+    /// The least fix point of a term.
     Fix(Fix),
+    /// A fixed point variable.
     Binding(Variable),
+    /// A formal parameter.
     Variable(Variable),
+    /// A macro invocation.
     Call(Call),
 }
 
 impl Term {
+    /// Dispatches a [`Visitor`] to the underlying term.
     pub fn visit<V: Visitor + ?Sized>(&self, visitor: &mut V) -> <V as Visitor>::Out {
         match self {
             Self::Epsilon(eps) => visitor.visit_epsilon(eps),
@@ -379,6 +420,7 @@ impl Term {
         }
     }
 
+    /// Dispatches a [`VisitorMut`] to the underlying term.
     pub fn visit_mut<V: VisitorMut>(&mut self, visitor: &mut V) -> <V as VisitorMut>::Out {
         match self {
             Self::Epsilon(eps) => visitor.visit_mut_epsilon(eps),
@@ -392,6 +434,7 @@ impl Term {
         }
     }
 
+    /// Dispatches a [`Folder`] to the underlying term.
     pub fn fold<F: Folder>(self, folder: &mut F) -> <F as Folder>::Out {
         match self {
             Self::Epsilon(eps) => folder.fold_epsilon(eps),
@@ -407,16 +450,14 @@ impl Term {
 }
 
 #[derive(Debug)]
+/// An error when checking whether a term is well typed.
 pub enum TermError {
+    /// An error with a [`Cat`].
     Cat(CatError),
+    /// An error with an [`Alt`].
     Alt(AltError),
+    /// An error with a binding [`Variable`].
     Binding(BindingError),
-}
-
-impl From<Never> for TermError {
-    fn from(other: Never) -> Self {
-        match other {}
-    }
 }
 
 impl From<CatError> for TermError {
@@ -459,7 +500,9 @@ impl Display for TermError {
 
 impl Error for TermError {}
 
+/// Immutably visit parts of a [`Term`].
 pub trait Visitor {
+    /// The result of visiting terms.
     type Out;
     fn visit_epsilon(&mut self, eps: &Epsilon) -> Self::Out;
 
@@ -576,7 +619,7 @@ impl Visitor for Nullable<'_> {
     }
 
     fn visit_fix(&mut self, fix: &Fix) -> Self::Out {
-        fix.fixpoint(false, |fix, last| {
+        fix.fixpoint(|fix, last| {
             self.0.push_nullable(*last);
             let res = fix.inner.visit(self)?;
             self.0.pop_nullable();
@@ -634,7 +677,7 @@ impl Visitor for FirstSet<'_> {
 
     fn visit_fix(&mut self, fix: &Fix) -> Self::Out {
         let nullable = Nullable(self.0.as_null()).visit_fix(fix)?;
-        fix.fixpoint(typed::FirstSet::new(), |fix, last| {
+        fix.fixpoint(|fix, last: &typed::FirstSet| {
             self.0.push_first_set(nullable, last.clone());
             let res = fix.inner.visit(self)?;
             self.0.pop_first_set();
@@ -697,7 +740,7 @@ impl Visitor for FlastSet<'_> {
     fn visit_fix(&mut self, fix: &Fix) -> Self::Out {
         let nullable = Nullable(self.0.as_null()).visit_fix(fix)?;
         let first_set = FirstSet(self.0.as_first()).visit_fix(fix)?;
-        fix.fixpoint(typed::FlastSet::new(), |fix, last| {
+        fix.fixpoint(|fix, last: &typed::FlastSet| {
             self.0
                 .push_flast_set(nullable, first_set.clone(), last.clone());
             let res = fix.inner.visit(self)?;
