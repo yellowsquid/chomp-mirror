@@ -1,12 +1,29 @@
-use chomp::ast::InlineCall;
-use chomp::{ast::TypeCheck, nibble::File};
-use proc_macro2::Span;
 use std::{
     error::Error,
+    fmt::Display,
     io::{self, Read, Write},
     process::exit,
 };
-use syn::Ident;
+
+use chomp::{
+    chomp::{
+        check::{InlineCall, TypeCheck},
+        context::Context,
+        visit::Visitable,
+    },
+    lower::{rust::RustBackend, Backend, GenerateCode},
+    nibble::cst::File,
+};
+
+#[derive(Debug)]
+struct UndecVar;
+
+impl Display for UndecVar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Undeclared variable somewhere.")
+    }
+}
+impl Error for UndecVar {}
 
 fn main() {
     let mut input = String::new();
@@ -14,27 +31,32 @@ fn main() {
         .read_to_string(&mut input)
         .map_err(|e| Box::new(e) as Box<dyn Error>)
         .and_then(|_| syn::parse_str(&input).map_err(|e| Box::new(e) as Box<dyn Error>))
-        .and_then(|nibble: File| {
-            let (funs, goal) = nibble.convert();
-
+        .and_then(|nibble: File| nibble.convert().ok_or(Box::new(UndecVar) as Box<dyn Error>))
+        .and_then(|(funs, goal)| {
             funs.into_iter()
-                .try_rfold(goal, |goal, (name, term, args)| {
-                    goal.fold(&mut InlineCall::new(name, term, args))
+                .try_rfold(goal, |goal, function| {
+                    goal.fold(&mut InlineCall::new(function))
                 })
                 .map_err(|e| Box::new(e) as Box<dyn Error>)
         })
         .and_then(|term| {
-            term.fold(&mut TypeCheck::new())
-                .map_err(|e| Box::new(e) as Box<dyn Error>)
+            let mut context = Context::default();
+            term.fold(&mut TypeCheck {
+                context: &mut context,
+            })
+            .map_err(|e| Box::new(e) as Box<dyn Error>)
         })
-        .map(|(typed, _)| typed.emit_code(Ident::new("Ast", Span::call_site())))
+        .map(|typed| {
+            let mut backend = RustBackend::default();
+            let id = typed.gen(&mut backend);
+            backend.emit_code(id)
+        })
         .and_then(|code| {
             write!(io::stdout(), "{:#}", code).map_err(|e| Box::new(e) as Box<dyn Error>)
         });
 
     if let Err(e) = res {
         eprintln!("{}", e);
-        drop(e);
         exit(1)
     }
 }

@@ -23,5 +23,6 @@
 #![warn(unused_qualifications)]
 #![warn(variant_size_differences)]
 
+pub mod chomp;
+pub mod lower;
 pub mod nibble;
-pub mod ast;
