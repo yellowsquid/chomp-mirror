@@ -4,6 +4,9 @@ version = "0.1.0"
 authors = ["Greg Brown <gmb60@cam.ac.uk>"]
 edition = "2018"
 
+[workspace]
+members = ["chewed"]
+
 [dependencies]
 quote = "1.0.7"
 
@@ -14,3 +17,6 @@ features = ["span-locations"]
 [dependencies.syn]
 version = "1.0.48"
 features = ["extra-traits"]
+
+[dev-dependencies]
+chewed = {path = "chewed"}

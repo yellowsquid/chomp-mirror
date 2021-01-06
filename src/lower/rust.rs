@@ -46,13 +46,7 @@ impl Backend for RustBackend {
             None => {
                 let id = self.data.len();
                 let ty = quote! { () };
-                let tokens = quote! {
-                    impl Parse for () {
-                        fn parse<P: Parser>(_input: &mut P) -> Result<Self> {
-                            Ok(())
-                        }
-                    }
-                };
+                let tokens = TokenStream::new();
                 self.data.push((ty, tokens, BTreeSet::new()));
                 id
             }
@@ -75,7 +69,7 @@ impl Backend for RustBackend {
                 pub struct #name;
 
                 impl Parse for #name {
-                    fn parse<P: Parser>(input: &mut P) -> Result<Self> {
+                    fn take<P: Parser + ?Sized>(input: &mut P) -> Result<Self, TakeError> {
                         input.take_str(#lit).map(|()| #name)
                     }
                 }
@@ -145,10 +139,10 @@ impl Backend for RustBackend {
 
                 quote! {
                     impl Parse for #name {
-                        fn parse<P: Parser>(input: &mut P) -> Result<Self> {
+                        fn take<P: Parser + ?Sized>(input: &mut P) -> Result<Self, TakeError> {
                             match input.peek() {
-                                #(Some(#iter))|* => input.parse().map(Self::Right),
-                                _ => input.parse().map(Self::Left),
+                                #(Some(#iter))|* => input.take().map(Self::Right),
+                                _ => input.take().map(Self::Left),
                             }
                         }
                     }
@@ -158,10 +152,10 @@ impl Backend for RustBackend {
 
                 quote! {
                     impl Parse for #name {
-                        fn parse<P: Parser>(input: &mut P) -> Result<Self> {
+                        fn take<P: Parser + ?Sized>(input: &mut P) -> Result<Self, TakeError> {
                             match input.peek() {
-                                #(Some(#iter))|* => input.parse().map(Self::Left),
-                                _ => input.parse().map(Self::Right),
+                                #(Some(#iter))|* => input.take().map(Self::Left),
+                                _ => input.take().map(Self::Right),
                             }
                         }
                     }
@@ -172,11 +166,11 @@ impl Backend for RustBackend {
 
                 quote! {
                     impl Parse for #name {
-                        fn parse<P: Parser>(input: &mut P) -> Result<Self> {
-                            match input.peek().ok_or(Error::EndOfStream)? {
-                                #(#iter_left)|* => input.parse().map(Self::Left),
-                                #(#iter_right)|* => input.parse().map(Self::Right),
-                                c => input.error(Error::BadBranch(c, &[#(#iter_first),*]))
+                        fn take<P: Parser + ?Sized>(input: &mut P) -> Result<Self, TakeError> {
+                            match input.peek().ok_or(TakeError::EndOfStream)? {
+                                #(#iter_left)|* => input.take().map(Self::Left),
+                                #(#iter_right)|* => input.take().map(Self::Right),
+                                c => input.error(TakeError::BadBranch(c, &[#(#iter_first),*]))
                             }
                         }
                     }
@@ -213,7 +207,7 @@ impl Backend for RustBackend {
                 pub struct #name(#inner_ty);
 
                 impl Parse for #name {
-                    fn parse<P: Parser>(input: &mut P) -> Result<Self> {
+                    fn take<P: Parser + ?Sized>(input: &mut P) -> Result<Self, TakeError> {
                         input.parse().map(Self)
                     }
                 }
@@ -239,10 +233,13 @@ impl Backend for RustBackend {
     }
 
     fn emit_code(self, id: Self::Id) -> Self::Code {
-        let root = self.data[id].clone();
-        let mut tokens = root.1;
+        let mut tokens = quote! {
+            use ::chewed::*;
+        };
+
+        let (root_ty, root_impl, mut todo) = self.data[id].clone();
+        tokens.extend(root_impl);
         let mut completed = [id].iter().cloned().collect::<BTreeSet<_>>();
-        let mut todo = root.2;
 
         while !todo.is_empty() {
             let mut next = BTreeSet::new();
@@ -257,58 +254,9 @@ impl Backend for RustBackend {
             todo = next;
         }
 
-        let root_ty = root.0;
         tokens.extend(quote! {
             pub type Ast = #root_ty;
-
-            pub enum Error {
-                BadBranch(char, &'static [char]),
-                EndOfStream,
-            }
-
-            pub type Result<T> = std::result::Result<T, Error>;
-
-            pub trait Parser: Iterator<Item = char> {
-                fn peek(&mut self) -> Option<char>;
-
-                fn parse<T: Parse>(&mut self) -> Result<T> where Self: Sized {
-                    T::parse(self)
-                }
-
-                fn take_str(&mut self, s: &str) -> Result<()>;
-
-                fn error<T>(&mut self, e: Error) -> Result<T>;
-            }
-
-            pub trait Parse: Sized {
-                fn parse<P: Parser>(input: &mut P) -> Result<Self>;
-            }
-
         });
-
-        // Good enough guess of whether we need concatenation rules
-        if !self.cat_map.is_empty() {
-            tokens.extend(quote! {
-                impl<A: Parse, B: Parse> Parse for (A, B) {
-                    fn parse<P: Parser>(input: &mut P) -> Result<Self> {
-                        let a = input.parse()?;
-                        let b = input.parse()?;
-                        Ok((a, b))
-                    }
-                }
-            });
-        }
-
-        // Good enough guess of whether we need variable rules
-        if !self.fix_map.is_empty() {
-            tokens.extend(quote! {
-                impl<T: Parse + Sized> Parse for Box<T> {
-                    fn parse<P: Parser>(input: &mut P) -> Result<Self> {
-                        input.parse().map(Box::new)
-                    }
-                }
-            });
-        }
 
         tokens
     }
