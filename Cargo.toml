@@ -5,18 +5,15 @@ authors = ["Greg Brown <gmb60@cam.ac.uk>"]
 edition = "2018"
 
 [workspace]
-members = ["chewed"]
+members = ["autochomp", "chewed"]
 
 [dependencies]
-quote = "1.0.7"
+quote = "1"
 
 [dependencies.proc-macro2]
-version = "1.0.24"
+version = "1"
 features = ["span-locations"]
 
 [dependencies.syn]
-version = "1.0.48"
+version = "1"
 features = ["extra-traits"]
-
-[dev-dependencies]
-chewed = {path = "chewed"}

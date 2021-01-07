@@ -66,6 +66,7 @@ impl Backend for RustBackend {
             );
             let tokens = quote! {
                 #[doc=#doc_name]
+                #[derive(Clone, Debug, Eq, Hash, PartialEq)]
                 pub struct #name;
 
                 impl Parse for #name {
@@ -128,6 +129,7 @@ impl Backend for RustBackend {
             let right_ty = self.data[right].0.clone();
             let name = format_ident!("Alt{}", id);
             let mut tokens = quote! {
+                #[derive(Clone, Debug, Eq, Hash, PartialEq)]
                 pub enum #name {
                     Left(#left_ty),
                     Right(#right_ty),
@@ -170,7 +172,7 @@ impl Backend for RustBackend {
                             match input.peek().ok_or(TakeError::EndOfStream)? {
                                 #(#iter_left)|* => input.take().map(Self::Left),
                                 #(#iter_right)|* => input.take().map(Self::Right),
-                                c => input.error(TakeError::BadBranch(c, &[#(#iter_first),*]))
+                                c => Err(TakeError::BadBranch(c, &[#(#iter_first),*]))
                             }
                         }
                     }
@@ -204,11 +206,12 @@ impl Backend for RustBackend {
             let inner = inner.gen(self);
             let inner_ty = self.data[inner].0.clone();
             let tokens = quote! {
+                #[derive(Clone, Debug, Eq, Hash, PartialEq)]
                 pub struct #name(#inner_ty);
 
                 impl Parse for #name {
                     fn take<P: Parser + ?Sized>(input: &mut P) -> Result<Self, TakeError> {
-                        input.parse().map(Self)
+                        input.take().map(Self)
                     }
                 }
             };

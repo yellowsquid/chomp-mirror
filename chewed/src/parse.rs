@@ -1,3 +1,5 @@
+use std::iter::Peekable;
+
 use super::error::{ParseError, TakeError};
 
 pub trait Parser: Iterator<Item = char> {
@@ -34,6 +36,12 @@ pub trait Parser: Iterator<Item = char> {
         }
 
         Ok(())
+    }
+}
+
+impl<I: Iterator<Item = char>> Parser for Peekable<I> {
+    fn peek(&mut self) -> Option<char> {
+        Peekable::peek(self).copied()
     }
 }
 

@@ -11,7 +11,7 @@ impl fmt::Display for TakeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::BadBranch(got, expected) => {
-                write!(f, "Unexpected character {:?}.", got)?;
+                write!(f, "Unexpected character {:?}. ", got)?;
 
                 if expected.is_empty() {
                     write!(f, "Expected end of input.")
@@ -50,6 +50,8 @@ impl fmt::Display for ParseError {
         }
     }
 }
+
+impl Error for ParseError {}
 
 impl From<TakeError> for ParseError {
     fn from(e: TakeError) -> Self {

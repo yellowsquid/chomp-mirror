@@ -291,7 +291,7 @@ impl Display for FixError {
         let start = self.0.span().unwrap_or_else(Span::call_site).start();
         write!(
             f,
-            "\n({}:{}) assuming `{}' has type {:?}.",
+            "\n{}:{}: assuming `{}' has type {:?}.",
             start.line,
             start.column,
             self.0.arg(),
