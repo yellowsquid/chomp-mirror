@@ -1,9 +1,14 @@
-use std::iter::Peekable;
+use super::{
+    error::{ParseError, TakeError},
+    position::LineCol,
+};
 
-use super::error::{ParseError, TakeError};
+pub trait Parser {
+    fn next(&mut self) -> Option<char>;
 
-pub trait Parser: Iterator<Item = char> {
     fn peek(&mut self) -> Option<char>;
+
+    fn pos(&self) -> LineCol;
 
     fn take<P: Parse>(&mut self) -> Result<P, TakeError> {
         P::take(self)
@@ -28,10 +33,10 @@ pub trait Parser: Iterator<Item = char> {
                     let mut out = String::from(&s[..count]);
                     out.push(got);
 
-                    return Err(TakeError::BadString(out, s));
+                    return Err(TakeError::BadString(self.pos(), out, s));
                 }
             } else {
-                return Err(TakeError::EndOfStream);
+                return Err(TakeError::EndOfStream(self.pos()));
             }
         }
 
@@ -39,9 +44,61 @@ pub trait Parser: Iterator<Item = char> {
     }
 }
 
-impl<I: Iterator<Item = char>> Parser for Peekable<I> {
+pub struct IterWrapper<T: ?Sized> {
+    pos: LineCol,
+    next: Option<char>,
+    iter: T,
+}
+
+impl<T: Iterator<Item = char>> IterWrapper<T> {
+    pub fn new(iter: T) -> Self {
+        Self {
+            pos: LineCol::default(),
+            next: None,
+            iter,
+        }
+    }
+}
+
+impl<I: ?Sized + Iterator<Item = char>> Parser for IterWrapper<I> {
+    fn next(&mut self) -> Option<char> {
+        match self.next.take().or_else(|| self.iter.next()) {
+            x @ Some('\n')
+            | x @ Some('\x0B')
+            | x @ Some('\x0C')
+            | x @ Some('\u{85}')
+            | x @ Some('\u{2028}')
+            | x @ Some('\u{2029}') => {
+                self.pos.line += 1;
+                self.pos.col = 0;
+                x
+            }
+            Some('\x0D') => {
+                if self.peek() == Some('\n') {
+                    self.pos.col += 1;
+                } else {
+                    self.pos.line += 1;
+                    self.pos.col = 0;
+                }
+                Some('\x0D')
+            }
+            x => {
+                self.pos.col += 1;
+                x
+            }
+        }
+    }
+
     fn peek(&mut self) -> Option<char> {
-        Peekable::peek(self).copied()
+        if self.next.is_none() {
+            self.next = self.iter.next();
+        }
+
+        self.next.as_ref().copied()
+    }
+
+    fn pos(&self) -> LineCol {
+        self.pos
     }
 }
 
@@ -52,7 +109,7 @@ pub trait Parse: Sized {
         let res = Self::take(&mut input)?;
 
         if input.peek().is_some() {
-            Err(ParseError::InputContinues)
+            Err(ParseError::InputContinues(input.pos()))
         } else {
             Ok(res)
         }
