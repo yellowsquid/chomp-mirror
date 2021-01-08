@@ -13,7 +13,7 @@ use super::{
 };
 
 /// A type error when using a fix point variable.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum VariableError {
     /// Usage of a free variable.
     FreeVariable(Variable),
@@ -34,7 +34,7 @@ impl Display for VariableError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::FreeVariable(var) => {
-                let start = var.name().span().start();
+                let start = var.name().span().unwrap_or_else(Span::call_site).start();
                 write!(
                     f,
                     "{}:{}: unbound variable '{}'",
@@ -44,7 +44,7 @@ impl Display for VariableError {
                 )
             }
             Self::GuardedVariable(var) => {
-                let start = var.name().span().start();
+                let start = var.name().span().unwrap_or_else(Span::call_site).start();
                 write!(
                     f,
                     "{}:{}: variable '{}' is guarded",
@@ -60,7 +60,7 @@ impl Display for VariableError {
 impl Error for VariableError {}
 
 /// A type error when concatenating two terms.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum CatError {
     /// The first term was unexpectedly nullable.
     FirstNullable(Cat),
@@ -159,7 +159,7 @@ impl Display for CatError {
 impl Error for CatError {}
 
 /// A type error when alternating two terms.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum AltError {
     /// Both terms are nullable.
     BothNullable(Alt),
@@ -271,7 +271,7 @@ impl Display for AltError {
 
 impl Error for AltError {}
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct FixError(pub Fix, pub Type, pub Box<TypeError>);
 
 impl From<FixError> for syn::Error {
@@ -302,7 +302,7 @@ impl Display for FixError {
 
 impl Error for FixError {}
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum TypeError {
     Cat(CatError),
     Alt(AltError),
@@ -352,7 +352,7 @@ impl Display for TypeError {
 
 impl Error for TypeError {}
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum SubstituteError {
     FreeParameter(Parameter),
     WrongArgCount { call: Call, expected: usize },
@@ -362,7 +362,7 @@ impl Display for SubstituteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::FreeParameter(param) => {
-                let start = param.name().span().start();
+                let start = param.name().span().unwrap_or_else(Span::call_site).start();
                 write!(
                     f,
                     "{}:{}: undeclared variable `{}'",

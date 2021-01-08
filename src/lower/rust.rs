@@ -1,9 +1,12 @@
 use std::collections::{BTreeSet, HashMap};
 
-use proc_macro2::{TokenStream, TokenTree};
+use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::{format_ident, quote};
 
-use crate::chomp::typed::{Alt, Cat, Epsilon, Fix, Literal, Typed, TypedExpression, Variable};
+use crate::chomp::{
+    ast,
+    typed::{Alt, Cat, Epsilon, Fix, Literal, Typed, TypedExpression, Variable},
+};
 
 use super::{Backend, GenerateCode};
 
@@ -54,7 +57,7 @@ impl Backend for RustBackend {
     }
 
     fn gen_literal(&mut self, lit: Literal) -> Self::Id {
-        let lit = lit.inner();
+        let lit: ast::Literal = lit.into();
         if let Some(&id) = self.lit_map.get(&lit.value()) {
             id
         } else {
@@ -64,6 +67,7 @@ impl Backend for RustBackend {
                 r#"The literal string `"{}"`."#,
                 lit.value().escape_debug().collect::<String>()
             );
+            let lit = lit.as_litstr(Span::call_site());
             let tokens = quote! {
                 #[doc=#doc_name]
                 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -169,10 +173,10 @@ impl Backend for RustBackend {
                 quote! {
                     impl Parse for #name {
                         fn take<P: Parser + ?Sized>(input: &mut P) -> Result<Self, TakeError> {
-                            match input.peek().ok_or(TakeError::EndOfStream)? {
+                            match input.peek().ok_or_else(|| TakeError::EndOfStream(input.pos()))? {
                                 #(#iter_left)|* => input.take().map(Self::Left),
                                 #(#iter_right)|* => input.take().map(Self::Right),
-                                c => Err(TakeError::BadBranch(c, &[#(#iter_first),*]))
+                                c => Err(TakeError::BadBranch(input.pos(), c, &[#(#iter_first),*]))
                             }
                         }
                     }

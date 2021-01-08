@@ -1,11 +1,80 @@
-use std::fmt::{self, Display};
+use std::{
+    fmt::{self, Display},
+    hash,
+};
 
 use proc_macro2::Span;
 use syn::{Ident, LitStr, Token};
 
-pub type Epsilon = Token![_];
+use super::Name;
 
-pub type Literal = LitStr;
+pub type Epsilon = Option<Token![_]>;
+
+#[derive(Clone, Debug)]
+pub enum Literal {
+    Spanned(LitStr),
+    Spanless(String),
+}
+
+impl Literal {
+    pub fn value(&self) -> String {
+        match self {
+            Self::Spanned(l) => l.value(),
+            Self::Spanless(s) => s.clone(),
+        }
+    }
+
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            Self::Spanned(l) => Some(l.span()),
+            Self::Spanless(_) => None,
+        }
+    }
+
+    pub fn as_litstr(self, span: Span) -> LitStr {
+        match self {
+            Self::Spanned(l) => l,
+            Self::Spanless(s) => LitStr::new(&s, span),
+        }
+    }
+}
+
+impl PartialEq for Literal {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Spanned(me), Self::Spanned(them)) => me == them,
+            (Self::Spanned(me), Self::Spanless(them)) => &me.value() == them,
+            (Self::Spanless(me), Self::Spanned(them)) => me == &them.value(),
+            (Self::Spanless(me), Self::Spanless(them)) => me == them,
+        }
+    }
+}
+
+impl Eq for Literal {}
+
+impl hash::Hash for Literal {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.value().hash(state)
+    }
+}
+
+impl Display for Literal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.value())
+    }
+}
+
+impl From<LitStr> for Literal {
+    fn from(l: LitStr) -> Self {
+        Self::Spanned(l)
+    }
+}
+
+impl From<String> for Literal {
+    fn from(s: String) -> Self {
+        Self::Spanless(s)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Cat {
@@ -50,6 +119,14 @@ impl Display for Cat {
     }
 }
 
+impl PartialEq for Cat {
+    fn eq(&self, other: &Self) -> bool {
+        self.first() == other.first() && self.second() == other.second()
+    }
+}
+
+impl Eq for Cat {}
+
 #[derive(Clone, Debug)]
 pub struct Alt {
     pub left: Box<Expression>,
@@ -93,15 +170,23 @@ impl Display for Alt {
     }
 }
 
+impl PartialEq for Alt {
+    fn eq(&self, other: &Self) -> bool {
+        self.left() == other.left() && self.right() == other.right()
+    }
+}
+
+impl Eq for Alt {}
+
 #[derive(Clone, Debug)]
 pub struct Fix {
-    pub arg: Ident,
+    pub arg: Name,
     pub inner: Box<Expression>,
     pub span: Option<Span>,
 }
 
 impl Fix {
-    pub fn new(arg: Ident, inner: Expression, span: Option<Span>) -> Self {
+    pub fn new(arg: Name, inner: Expression, span: Option<Span>) -> Self {
         Self {
             arg,
             inner: Box::new(inner),
@@ -109,7 +194,7 @@ impl Fix {
         }
     }
 
-    pub fn arg(&self) -> &Ident {
+    pub fn arg(&self) -> &Name {
         &self.arg
     }
 
@@ -132,18 +217,26 @@ impl Display for Fix {
     }
 }
 
-#[derive(Clone, Debug)]
+impl PartialEq for Fix {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner() == other.inner()
+    }
+}
+
+impl Eq for Fix {}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Variable {
-    pub name: Ident,
+    pub name: Name,
     pub index: usize,
 }
 
 impl Variable {
-    pub fn new(name: Ident, index: usize) -> Self {
+    pub fn new(name: Name, index: usize) -> Self {
         Self { name, index }
     }
 
-    pub fn name(&self) -> &Ident {
+    pub fn name(&self) -> &Name {
         &self.name
     }
 
@@ -162,18 +255,18 @@ impl Display for Variable {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Parameter {
-    pub name: Ident,
+    pub name: Name,
     pub index: usize,
 }
 
 impl Parameter {
-    pub fn new(name: Ident, index: usize) -> Self {
+    pub fn new(name: Name, index: usize) -> Self {
         Self { name, index }
     }
 
-    pub fn name(&self) -> &Ident {
+    pub fn name(&self) -> &Name {
         &self.name
     }
 
@@ -188,7 +281,7 @@ impl Parameter {
 
 impl Display for Parameter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.name.fmt(f)
+        write!(f, "{}", self.name)
     }
 }
 
@@ -242,6 +335,14 @@ impl Display for Call {
     }
 }
 
+impl PartialEq for Call {
+    fn eq(&self, other: &Self) -> bool {
+        self.name() == other.name() && self.args() == other.args()
+    }
+}
+
+impl Eq for Call {}
+
 #[derive(Clone, Debug)]
 pub enum Expression {
     /// Matches the empty string.
@@ -266,7 +367,7 @@ impl Display for Expression {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Epsilon(_) => write!(f, "_"),
-            Self::Literal(l) => write!(f, "{:?}", l.value()),
+            Self::Literal(l) => l.fmt(f),
             Self::Cat(c) => c.fmt(f),
             Self::Alt(a) => a.fmt(f),
             Self::Fix(x) => x.fmt(f),
@@ -276,6 +377,65 @@ impl Display for Expression {
         }
     }
 }
+
+impl PartialEq for Expression {
+    fn eq(&self, other: &Self) -> bool {
+        match self {
+            Self::Epsilon(_) => matches!(other, Self::Epsilon(_)),
+            Self::Literal(l) => {
+                if let Self::Literal(them) = other {
+                    l == them
+                } else {
+                    false
+                }
+            }
+            Self::Cat(c) => {
+                if let Self::Cat(them) = other {
+                    c == them
+                } else {
+                    false
+                }
+            }
+            Self::Alt(a) => {
+                if let Self::Alt(them) = other {
+                    a == them
+                } else {
+                    false
+                }
+            }
+            Self::Fix(f) => {
+                if let Self::Fix(them) = other {
+                    f == them
+                } else {
+                    false
+                }
+            }
+            Self::Variable(v) => {
+                if let Self::Variable(them) = other {
+                    v == them
+                } else {
+                    false
+                }
+            }
+            Self::Parameter(p) => {
+                if let Self::Parameter(them) = other {
+                    p == them
+                } else {
+                    false
+                }
+            }
+            Self::Call(c) => {
+                if let Self::Call(them) = other {
+                    c == them
+                } else {
+                    false
+                }
+            }
+        }
+    }
+}
+
+impl Eq for Expression {}
 
 impl From<Epsilon> for Expression {
     fn from(eps: Epsilon) -> Self {
@@ -334,7 +494,7 @@ pub struct Function {
 }
 
 impl Function {
-    pub fn new(name: Ident, params: usize, expr: Expression, span: Option<Span>) -> Self {
+    pub const fn new(name: Ident, params: usize, expr: Expression, span: Option<Span>) -> Self {
         Self {
             name,
             params,

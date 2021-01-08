@@ -1,11 +1,12 @@
 use std::hash::{Hash, Hasher};
 
 use proc_macro2::Span;
-use syn::{Ident, LitStr, Token};
+use syn::{Ident, Token};
 
 use super::{
     ast,
     set::{FirstSet, FlastSet},
+    Name,
 };
 
 #[derive(Debug, Default, Clone, Eq, Hash, PartialEq)]
@@ -71,7 +72,7 @@ impl Type {
 
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct Epsilon {
-    inner: Token![_],
+    inner: Option<Token![_]>,
     ty: Type,
 }
 
@@ -86,16 +87,16 @@ impl From<ast::Epsilon> for Epsilon {
 
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct Literal {
-    inner: LitStr,
+    inner: ast::Literal,
     ty: Type,
 }
 
 impl Literal {
-    pub fn inner(&self) -> &LitStr {
+    pub fn inner(&self) -> &ast::Literal {
         &self.inner
     }
 
-    pub fn span(&self) -> Span {
+    pub fn span(&self) -> Option<Span> {
         self.inner.span()
     }
 }
@@ -104,6 +105,12 @@ impl From<ast::Literal> for Literal {
     fn from(inner: ast::Literal) -> Self {
         let ty = Type::of_str(&inner.value());
         Self { inner, ty }
+    }
+}
+
+impl From<Literal> for ast::Literal {
+    fn from(lit: Literal) -> Self {
+        lit.inner
     }
 }
 
@@ -165,14 +172,14 @@ impl Alt {
 
 #[derive(Debug)]
 pub struct Fix {
-    arg: Ident,
+    arg: Name,
     inner: Box<TypedExpression>,
     span: Option<Span>,
     ty: Type,
 }
 
 impl Fix {
-    pub(crate) fn new(arg: Ident, inner: TypedExpression, span: Option<Span>, ty: Type) -> Self {
+    pub(crate) fn new(arg: Name, inner: TypedExpression, span: Option<Span>, ty: Type) -> Self {
         Self {
             arg,
             inner: Box::new(inner),
@@ -181,7 +188,7 @@ impl Fix {
         }
     }
 
-    pub fn unwrap(self) -> (Ident, TypedExpression, Option<Span>) {
+    pub fn unwrap(self) -> (Name, TypedExpression, Option<Span>) {
         (self.arg, *self.inner, self.span)
     }
 }
@@ -204,22 +211,17 @@ impl Hash for Fix {
 
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct Variable {
-    ident: Ident,
-    index: usize,
+    inner: ast::Variable,
     ty: Type,
 }
 
 impl Variable {
-    pub(crate) fn new(var: ast::Variable, ty: Type) -> Self {
-        Self {
-            ident: var.name,
-            index: var.index,
-            ty,
-        }
+    pub(crate) fn new(inner: ast::Variable, ty: Type) -> Self {
+        Self { inner, ty }
     }
 
     pub fn index(&self) -> usize {
-        self.index
+        self.inner.index
     }
 }
 

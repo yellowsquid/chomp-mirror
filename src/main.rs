@@ -7,7 +7,7 @@ use std::{
 
 use chomp::{
     chomp::{
-        check::{InlineCall, TypeCheck},
+        check::{InlineCalls, TypeCheck},
         context::Context,
         visit::Visitable,
     },
@@ -35,7 +35,7 @@ fn main() {
         .and_then(|(funs, goal)| {
             funs.into_iter()
                 .try_rfold(goal, |goal, function| {
-                    goal.fold(&mut InlineCall::new(function))
+                    goal.fold(&mut InlineCalls::new(function))
                 })
                 .map_err(|e| Box::new(e) as Box<dyn Error>)
         })

@@ -71,8 +71,8 @@ impl Convert for Ident {
         let span = self.span();
 
         match context.lookup(&self)? {
-            Binding::Variable(index) => Some(ast::Variable::new(self, index).into()),
-            Binding::Parameter(index) => Some(ast::Parameter::new(self, index).into()),
+            Binding::Variable(index) => Some(ast::Variable::new(self.into(), index).into()),
+            Binding::Parameter(index) => Some(ast::Parameter::new(self.into(), index).into()),
             Binding::Global => Some(ast::Call::new(self, Vec::new(), Some(span)).into()),
         }
     }
@@ -95,7 +95,7 @@ impl Convert for Fix {
         let span = self.span();
         let expr = self.expr;
         let inner = context.with_variable(&self.arg, |context| expr.convert(context))?;
-        Some(ast::Fix::new(self.arg, inner, span).into())
+        Some(ast::Fix::new(self.arg.into(), inner, span).into())
     }
 }
 
@@ -108,9 +108,9 @@ impl Convert for ParenExpression {
 impl Convert for Term {
     fn convert(self, context: &mut Context) -> Option<ast::Expression> {
         match self {
-            Self::Epsilon(e) => Some(e.into()),
+            Self::Epsilon(e) => Some(Some(e).into()),
             Self::Ident(i) => i.convert(context),
-            Self::Literal(l) => Some(l.into()),
+            Self::Literal(l) => Some(ast::Literal::from(l).into()),
             Self::Call(c) => c.convert(context),
             Self::Fix(f) => f.convert(context),
             Self::Parens(p) => p.convert(context),
