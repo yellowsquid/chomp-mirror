@@ -5,7 +5,7 @@ use std::{
     fs,
     io::{Read, Write},
     path::Path,
-    process::exit,
+    process::Command,
 };
 
 use chomp::{
@@ -36,9 +36,13 @@ fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
 
     let mut input = String::new();
-    let res = fs::File::open(PATH)
+
+    fs::File::open(PATH)
         .map_err(|e| Box::new(e) as Box<dyn Error>)
-        .and_then(|mut file| file.read_to_string(&mut input).map_err(|e| Box::new(e) as Box<dyn Error>))
+        .and_then(|mut file| {
+            file.read_to_string(&mut input)
+                .map_err(|e| Box::new(e) as Box<dyn Error>)
+        })
         .and_then(|_| syn::parse_str(&input).map_err(|e| Box::new(e) as Box<dyn Error>))
         .and_then(|nibble: File| nibble.convert().ok_or(Box::new(UndecVar) as Box<dyn Error>))
         .and_then(|(funs, goal)| {
@@ -64,10 +68,11 @@ fn main() {
             fs::File::create(Path::new(&out_dir).join("nibble.rs"))
                 .and_then(|mut f| write!(f, "{}", code))
                 .map_err(|e| Box::new(e) as Box<dyn Error>)
-        });
+        })
+        .unwrap();
 
-    if let Err(e) = res {
-        eprintln!("{}", e);
-        exit(1)
-    }
+    Command::new("rustfmt")
+        .arg(&format!("{}/nibble.rs", out_dir))
+        .status()
+        .unwrap();
 }
