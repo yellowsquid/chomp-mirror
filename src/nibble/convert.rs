@@ -73,7 +73,7 @@ impl Convert for Ident {
         match context.lookup(&self)? {
             Binding::Variable(index) => Some(ast::Variable::new(self.into(), index).into()),
             Binding::Parameter(index) => Some(ast::Parameter::new(self.into(), index).into()),
-            Binding::Global => Some(ast::Call::new(self, Vec::new(), Some(span)).into()),
+            Binding::Global => Some(ast::Call::new(self.into(), Vec::new(), Some(span)).into()),
         }
     }
 }
@@ -86,7 +86,7 @@ impl Convert for Call {
             .into_iter()
             .map(|arg| arg.convert(context))
             .collect::<Option<_>>()?;
-        Some(ast::Call::new(self.name, args, span).into())
+        Some(ast::Call::new(self.name.into(), args, span).into())
     }
 }
 

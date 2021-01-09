@@ -1,4 +1,4 @@
-use proc_macro2::{Ident, Span};
+use proc_macro2::Span;
 
 use super::super::{
     ast::{Alt, Call, Cat, Epsilon, Fix, Literal, Parameter, Variable},

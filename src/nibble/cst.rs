@@ -260,7 +260,7 @@ impl File {
             );
             names.push(stmt.name.clone());
             map.push(ast::Function::new(
-                stmt.name.clone(),
+                stmt.name.into(),
                 count,
                 stmt.expr.convert(&mut context)?,
                 span,

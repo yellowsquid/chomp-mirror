@@ -79,27 +79,156 @@ impl Folder for InlineCalls {
 
 #[cfg(test)]
 mod tests {
-    use proc_macro2::Span;
-    use syn::Ident;
+    use crate::chomp::Name;
 
     use super::*;
 
-    const OPT_NAME: &str = "opt";
-    const OPT: Function = Function::new(
-        Ident::new(OPT_NAME, Span::call_site()),
-        1,
-        Expression::Alt(Alt::new(
-            Epsilon::default().into(),
+    fn opt() -> Function {
+        Function::new(
+            Name::Spanless("opt".to_string()),
+            1,
+            Expression::Alt(Alt::new(
+                Expression::Epsilon(None),
+                None,
+                Parameter::new(Name::Spanless("x".to_string()), 0).into(),
+            )),
             None,
-            Parameter::new(None, 0).into(),
-        )),
-        None,
-    );
+        )
+    }
 
     #[test]
     fn test_inline_absent() {
         let expr = Epsilon::default();
-        let inlined = expr.fold(&mut InlineCalls::new(OPT));
-        assert_eq!(inlined, Ok(Expression::from(Epsilon::default())))
+        let inlined = expr.fold(&mut InlineCalls::new(opt()));
+        assert_eq!(inlined, Ok(Epsilon::default().into()))
+    }
+
+    #[test]
+    fn test_inline_in_fix() {
+        let expr = Fix::new(
+            Name::Spanless("rec".to_string()),
+            Call::new(
+                Name::Spanless("opt".to_string()),
+                vec![Variable::new(Name::Spanless("rec".to_string()), 0).into()],
+                None,
+            )
+            .into(),
+            None,
+        );
+        let inlined = expr.fold(&mut InlineCalls::new(opt()));
+        assert_eq!(
+            inlined,
+            Ok(Fix::new(
+                Name::Spanless("rec".to_string()),
+                Alt::new(
+                    Epsilon::default().into(),
+                    None,
+                    Variable::new(Name::Spanless("rec".to_string()), 0).into()
+                )
+                .into(),
+                None
+            )
+            .into())
+        )
+    }
+
+    #[test]
+    fn test_inline_deepens_vars() {
+        let function = Function::new(
+            Name::Spanless("plus".into()),
+            1,
+            Fix::new(
+                Name::Spanless("rec".to_string()),
+                Cat::new(
+                    Parameter::new(Name::Spanless("x".to_string()), 0).into(),
+                    None,
+                    Variable::new(Name::Spanless("rec".to_string()), 0).into(),
+                )
+                .into(),
+                None,
+            )
+            .into(),
+            None,
+        );
+        let expr = Fix::new(
+            Name::Spanless("var".to_string()),
+            Call::new(
+                Name::Spanless("plus".into()),
+                vec![Variable::new(Name::Spanless("var".to_string()), 0).into()],
+                None,
+            )
+            .into(),
+            None
+        );
+        let inlined = expr.fold(&mut InlineCalls::new(function));
+        assert_eq!(
+            inlined,
+            Ok(Fix::new(
+                Name::Spanless("var".to_string()),
+                Fix::new(
+                    Name::Spanless("rec".to_string()),
+                    Cat::new(
+                        Variable::new(Name::Spanless("var".to_string()), 1).into(),
+                        None,
+                        Variable::new(Name::Spanless("rec".to_string()), 0).into(),
+                    )
+                    .into(),
+                    None,
+                )
+                .into(),
+                None
+            )
+            .into())
+        )
+    }
+
+    #[test]
+    fn test_inline_resets_vars() {
+        let function = Function::new(
+            Name::Spanless("plus".into()),
+            1,
+            Cat::new(
+                Fix::new(
+                    Name::Spanless("rec".to_string()),
+                    Epsilon::default().into(),
+                    None,
+                )
+                .into(),
+                None,
+                Parameter::new(Name::Spanless("x".to_string()), 0).into(),
+            )
+            .into(),
+            None,
+        );
+        let expr = Fix::new(
+            Name::Spanless("var".to_string()),
+            Call::new(
+                Name::Spanless("plus".into()),
+                vec![Variable::new(Name::Spanless("var".to_string()), 0).into()],
+                None,
+            )
+            .into(),
+            None
+        );
+        let inlined = expr.fold(&mut InlineCalls::new(function));
+        assert_eq!(
+            inlined,
+            Ok(Fix::new(
+                Name::Spanless("var".to_string()),
+                Cat::new(
+                    Fix::new(
+                        Name::Spanless("rec".to_string()),
+                        Epsilon::default().into(),
+                        None,
+                    )
+                    .into(),
+                    None,
+                    Variable::new(Name::Spanless("var".to_string()), 0).into(),
+                )
+                .into(),
+                None
+            )
+            .into())
+        )
     }
 }

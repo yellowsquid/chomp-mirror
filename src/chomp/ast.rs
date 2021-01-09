@@ -262,7 +262,7 @@ pub struct Parameter {
 }
 
 impl Parameter {
-    pub fn new(name: Name, index: usize) -> Self {
+    pub const fn new(name: Name, index: usize) -> Self {
         Self { name, index }
     }
 
@@ -288,17 +288,17 @@ impl Display for Parameter {
 /// A macro invocation.
 #[derive(Clone, Debug)]
 pub struct Call {
-    pub name: Ident,
+    pub name: Name,
     pub args: Vec<Expression>,
     pub span: Option<Span>,
 }
 
 impl Call {
-    pub fn new(name: Ident, args: Vec<Expression>, span: Option<Span>) -> Self {
+    pub fn new(name: Name, args: Vec<Expression>, span: Option<Span>) -> Self {
         Self { name, args, span }
     }
 
-    pub fn name(&self) -> &Ident {
+    pub fn name(&self) -> &Name {
         &self.name
     }
 
@@ -487,14 +487,14 @@ impl From<Call> for Expression {
 
 #[derive(Clone, Debug)]
 pub struct Function {
-    pub name: Ident,
+    pub name: Name,
     pub params: usize,
     pub expr: Expression,
     pub span: Option<Span>,
 }
 
 impl Function {
-    pub const fn new(name: Ident, params: usize, expr: Expression, span: Option<Span>) -> Self {
+    pub const fn new(name: Name, params: usize, expr: Expression, span: Option<Span>) -> Self {
         Self {
             name,
             params,

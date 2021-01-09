@@ -1,7 +1,7 @@
 use std::hash::{Hash, Hasher};
 
 use proc_macro2::Span;
-use syn::{Ident, Token};
+use syn::Token;
 
 use super::{
     ast,
