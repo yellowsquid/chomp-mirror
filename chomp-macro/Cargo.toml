@@ -1,0 +1,18 @@
+[package]
+name = "chomp-macro"
+version = "0.1.0"
+authors = ["Greg Brown <gmb60@cam.ac.uk>"]
+edition = "2018"
+
+[dependencies]
+chomp = {path = ".."}
+
+[dependencies.syn]
+version = "1"
+features = ["parsing", "proc-macro"]
+
+[dev-dependencies]
+chewed = {path = "../chewed"}
+
+[lib]
+proc_macro = true

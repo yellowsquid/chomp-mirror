@@ -158,7 +158,7 @@ mod tests {
                 None,
             )
             .into(),
-            None
+            None,
         );
         let inlined = expr.fold(&mut InlineCalls::new(function));
         assert_eq!(
@@ -208,7 +208,7 @@ mod tests {
                 None,
             )
             .into(),
-            None
+            None,
         );
         let inlined = expr.fold(&mut InlineCalls::new(function));
         assert_eq!(
@@ -230,5 +230,120 @@ mod tests {
             )
             .into())
         )
+    }
+
+    #[test]
+    fn test_inline_double_subst() {
+        let expr = Call::new(
+            Name::Spanless("opt".to_string()),
+            vec![Call::new(
+                Name::Spanless("opt".to_string()),
+                vec![Literal::Spanless("x".to_string()).into()],
+                None,
+            )
+            .into()],
+            None,
+        );
+        let inlined = expr.fold(&mut InlineCalls::new(opt()));
+        assert_eq!(
+            inlined,
+            Ok(Alt::new(
+                Epsilon::default().into(),
+                None,
+                Alt::new(
+                    Epsilon::default().into(),
+                    None,
+                    Literal::Spanless("x".to_string()).into()
+                )
+                .into()
+            )
+            .into())
+        )
+    }
+
+    #[test]
+    fn test_inline_call_args() {
+        let expr = Fix::new(
+            Name::Spanless("rec".to_string()),
+            Cat::new(
+                Literal::Spanless("a".to_string()).into(),
+                None,
+                Call::new(
+                    Name::Spanless("opt".to_string()),
+                    vec![Cat::new(
+                        Cat::new(
+                            Literal::Spanless("a".to_string()).into(),
+                            None,
+                            Fix::new(
+                                Name::Spanless("star".to_string()),
+                                Call::new(
+                                    Name::Spanless("opt".to_string()),
+                                    vec![Cat::new(
+                                        Literal::Spanless(" ".to_string()).into(),
+                                        None,
+                                        Variable::new(Name::Spanless("star".to_string()), 0).into(),
+                                    )
+                                    .into()],
+                                    None,
+                                )
+                                .into(),
+                                None,
+                            )
+                            .into(),
+                        )
+                        .into(),
+                        None,
+                        Variable::new(Name::Spanless("rec".to_string()), 0).into(),
+                    )
+                    .into()],
+                    None,
+                )
+                .into(),
+            )
+            .into(),
+            None,
+        );
+        let inlined = expr.fold(&mut InlineCalls::new(opt()));
+        assert_eq!(inlined,
+        Ok(Fix::new(
+            Name::Spanless("rec".to_string()),
+            Cat::new(
+                Literal::Spanless("a".to_string()).into(),
+                None,
+                Alt::new(
+                    Epsilon::default().into(),
+                    None,
+                    Cat::new(
+                        Cat::new(
+                            Literal::Spanless("a".to_string()).into(),
+                            None,
+                            Fix::new(
+                                Name::Spanless("star".to_string()),
+                                Alt::new(
+                                    Epsilon::default().into(),
+                                    None,
+                                    Cat::new(
+                                        Literal::Spanless(" ".to_string()).into(),
+                                        None,
+                                        Variable::new(Name::Spanless("star".to_string()), 0).into(),
+                                    )
+                                        .into()
+                                )
+                                .into(),
+                                None,
+                            )
+                            .into(),
+                        )
+                        .into(),
+                        None,
+                        Variable::new(Name::Spanless("rec".to_string()), 0).into(),
+                    )
+                    .into(),
+                )
+                .into(),
+            )
+            .into(),
+            None,
+        ).into()))
     }
 }

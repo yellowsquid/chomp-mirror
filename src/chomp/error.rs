@@ -358,6 +358,19 @@ pub enum SubstituteError {
     WrongArgCount { call: Call, expected: usize },
 }
 
+impl From<SubstituteError> for syn::Error {
+    fn from(e: SubstituteError) -> Self {
+        match e {
+            SubstituteError::FreeParameter(param) => {
+                Self::new(param.name().span().unwrap_or_else(Span::call_site), format!("undeclared variable `{}'", param.name()))
+            }
+            SubstituteError::WrongArgCount { call, expected } => {
+                Self::new(call.span().unwrap_or_else(Span::call_site), format!("wrong number of arguments. Expected {}, got {}", expected, call.args().len()))
+            }
+        }
+    }
+}
+
 impl Display for SubstituteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -378,8 +391,8 @@ impl Display for SubstituteError {
                     "{}:{}: wrong number of arguments. Expected {}, got {}",
                     start.line,
                     start.column,
-                    call.args().len(),
-                    expected
+                    expected,
+                    call.args().len()
                 )
             }
         }

@@ -1,15 +1,12 @@
 use std::{
     error::Error,
-    fs,
     io::{self, Read, Write},
     process::exit,
 };
 
 use chewed::{IterWrapper, Parser};
 
-mod nibble {
-    include!(concat!(env!("OUT_DIR"), "/nibble.rs"));
-}
+mod nibble;
 
 fn main() {
     let mut input = String::new();

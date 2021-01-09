@@ -21,7 +21,7 @@ pub trait Parser {
         P::parse(self)
     }
 
-    fn take_str(&mut self, s: &'static str) -> Result<(), TakeError> {
+    fn consume_str(&mut self, s: &'static str) -> Result<(), TakeError> {
         let mut count = 0;
 
         for exp in s.chars() {
@@ -113,6 +113,14 @@ pub trait Parse: Sized {
         } else {
             Ok(res)
         }
+    }
+
+    fn take_str(input: &str) -> Result<Self, TakeError> {
+        Self::take(&mut IterWrapper::new(input.chars()))
+    }
+
+    fn parse_str(input: &str) -> Result<Self, ParseError> {
+        Self::parse(IterWrapper::new(input.chars()))
     }
 }
 

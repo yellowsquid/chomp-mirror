@@ -75,7 +75,7 @@ impl Backend for RustBackend {
 
                 impl Parse for #name {
                     fn take<P: Parser + ?Sized>(input: &mut P) -> Result<Self, TakeError> {
-                        input.take_str(#lit).map(|()| #name)
+                        input.consume_str(#lit).map(|()| #name)
                     }
                 }
             };
@@ -206,8 +206,11 @@ impl Backend for RustBackend {
                 TokenStream::new(),
                 BTreeSet::new(),
             ));
+
             self.context.push(id);
             let inner = inner.gen(self);
+            self.context.pop();
+
             let inner_ty = self.data[inner].0.clone();
             let tokens = quote! {
                 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
