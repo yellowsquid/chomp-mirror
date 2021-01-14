@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use super::{
     error::{ParseError, TakeError},
     position::LineCol,
@@ -102,7 +104,7 @@ impl<I: ?Sized + Iterator<Item = char>> Parser for IterWrapper<I> {
     }
 }
 
-pub trait Parse: Sized {
+pub trait Parse: Display + Sized {
     fn take<P: Parser + ?Sized>(input: &mut P) -> Result<Self, TakeError>;
 
     fn parse<P: Parser>(mut input: P) -> Result<Self, ParseError> {
@@ -124,23 +126,18 @@ pub trait Parse: Sized {
     }
 }
 
-impl Parse for () {
-    fn take<P: Parser + ?Sized>(_: &mut P) -> Result<Self, TakeError> {
-        Ok(())
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct Epsilon;
+
+impl Display for Epsilon {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "")
     }
 }
 
-impl<A: Parse, B: Parse> Parse for (A, B) {
-    fn take<P: Parser + ?Sized>(input: &mut P) -> Result<Self, TakeError> {
-        let a = input.take()?;
-        let b = input.take()?;
-        Ok((a, b))
-    }
-
-    fn parse<P: Parser>(mut input: P) -> Result<Self, ParseError> {
-        let a = A::take(&mut input)?;
-        let b = B::parse(input)?;
-        Ok((a, b))
+impl Parse for Epsilon {
+    fn take<P: Parser + ?Sized>(_: &mut P) -> Result<Self, TakeError> {
+        Ok(Epsilon)
     }
 }
 

@@ -1,62 +1,120 @@
-use super::ast::{Alt, Call, Cat, Epsilon, Expression, Fix, Literal, Parameter, Variable};
+use proc_macro2::Span;
+
+use super::{
+    ast::{
+        Alt, Call, Cat, Epsilon, Expression, Fix, Literal, NamedExpression, Parameter, Variable,
+    },
+    Name,
+};
 
 pub trait Visitor {
     type Out;
-    fn visit_epsilon(&mut self, eps: &Epsilon) -> Self::Out;
+    fn visit_epsilon(
+        &mut self,
+        name: Option<&Name>,
+        span: Option<Span>,
+        eps: &Epsilon,
+    ) -> Self::Out;
 
-    fn visit_literal(&mut self, lit: &Literal) -> Self::Out;
+    fn visit_literal(
+        &mut self,
+        name: Option<&Name>,
+        span: Option<Span>,
+        lit: &Literal,
+    ) -> Self::Out;
 
-    fn visit_cat(&mut self, cat: &Cat) -> Self::Out;
+    fn visit_cat(&mut self, name: Option<&Name>, span: Option<Span>, cat: &Cat) -> Self::Out;
 
-    fn visit_alt(&mut self, alt: &Alt) -> Self::Out;
+    fn visit_alt(&mut self, name: Option<&Name>, span: Option<Span>, alt: &Alt) -> Self::Out;
 
-    fn visit_fix(&mut self, fix: &Fix) -> Self::Out;
+    fn visit_fix(&mut self, name: Option<&Name>, span: Option<Span>, fix: &Fix) -> Self::Out;
 
-    fn visit_variable(&mut self, var: &Variable) -> Self::Out;
+    fn visit_variable(
+        &mut self,
+        name: Option<&Name>,
+        span: Option<Span>,
+        var: &Variable,
+    ) -> Self::Out;
 
-    fn visit_parameter(&mut self, param: &Parameter) -> Self::Out;
+    fn visit_parameter(
+        &mut self,
+        name: Option<&Name>,
+        span: Option<Span>,
+        param: &Parameter,
+    ) -> Self::Out;
 
-    fn visit_call(&mut self, call: &Call) -> Self::Out;
+    fn visit_call(&mut self, name: Option<&Name>, span: Option<Span>, call: &Call) -> Self::Out;
 }
 
 pub trait Mapper {
     type Out;
 
-    fn map_epsilon(&mut self, eps: &mut Epsilon) -> Self::Out;
+    fn map_epsilon(
+        &mut self,
+        name: &mut Option<Name>,
+        span: Option<Span>,
+        eps: &mut Epsilon,
+    ) -> Self::Out;
 
-    fn map_literal(&mut self, lit: &mut Literal) -> Self::Out;
+    fn map_literal(
+        &mut self,
+        name: &mut Option<Name>,
+        span: Option<Span>,
+        lit: &mut Literal,
+    ) -> Self::Out;
 
-    fn map_cat(&mut self, cat: &mut Cat) -> Self::Out;
+    fn map_cat(&mut self, name: &mut Option<Name>, span: Option<Span>, cat: &mut Cat) -> Self::Out;
 
-    fn map_alt(&mut self, alt: &mut Alt) -> Self::Out;
+    fn map_alt(&mut self, name: &mut Option<Name>, span: Option<Span>, alt: &mut Alt) -> Self::Out;
 
-    fn map_fix(&mut self, fix: &mut Fix) -> Self::Out;
+    fn map_fix(&mut self, name: &mut Option<Name>, span: Option<Span>, fix: &mut Fix) -> Self::Out;
 
-    fn map_variable(&mut self, var: &mut Variable) -> Self::Out;
+    fn map_variable(
+        &mut self,
+        name: &mut Option<Name>,
+        span: Option<Span>,
+        var: &mut Variable,
+    ) -> Self::Out;
 
-    fn map_parameter(&mut self, param: &mut Parameter) -> Self::Out;
+    fn map_parameter(
+        &mut self,
+        name: &mut Option<Name>,
+        span: Option<Span>,
+        param: &mut Parameter,
+    ) -> Self::Out;
 
-    fn map_call(&mut self, call: &mut Call) -> Self::Out;
+    fn map_call(
+        &mut self,
+        name: &mut Option<Name>,
+        span: Option<Span>,
+        call: &mut Call,
+    ) -> Self::Out;
 }
 
 pub trait Folder {
     type Out;
 
-    fn fold_epsilon(&mut self, eps: Epsilon) -> Self::Out;
+    fn fold_epsilon(&mut self, name: Option<Name>, span: Option<Span>, eps: Epsilon) -> Self::Out;
 
-    fn fold_literal(&mut self, lit: Literal) -> Self::Out;
+    fn fold_literal(&mut self, name: Option<Name>, span: Option<Span>, lit: Literal) -> Self::Out;
 
-    fn fold_cat(&mut self, cat: Cat) -> Self::Out;
+    fn fold_cat(&mut self, name: Option<Name>, span: Option<Span>, cat: Cat) -> Self::Out;
 
-    fn fold_alt(&mut self, alt: Alt) -> Self::Out;
+    fn fold_alt(&mut self, name: Option<Name>, span: Option<Span>, alt: Alt) -> Self::Out;
 
-    fn fold_fix(&mut self, fix: Fix) -> Self::Out;
+    fn fold_fix(&mut self, name: Option<Name>, span: Option<Span>, fix: Fix) -> Self::Out;
 
-    fn fold_variable(&mut self, var: Variable) -> Self::Out;
+    fn fold_variable(&mut self, name: Option<Name>, span: Option<Span>, var: Variable)
+        -> Self::Out;
 
-    fn fold_parameter(&mut self, param: Parameter) -> Self::Out;
+    fn fold_parameter(
+        &mut self,
+        name: Option<Name>,
+        span: Option<Span>,
+        param: Parameter,
+    ) -> Self::Out;
 
-    fn fold_call(&mut self, call: Call) -> Self::Out;
+    fn fold_call(&mut self, name: Option<Name>, span: Option<Span>, call: Call) -> Self::Out;
 }
 
 pub trait Visitable {
@@ -67,70 +125,43 @@ pub trait Visitable {
     fn fold<F: Folder>(self, folder: &mut F) -> <F as Folder>::Out;
 }
 
-macro_rules! visitable_leaf {
-    ($ty:ty, $visit:ident, $map:ident, $fold:ident) => {
-        impl Visitable for $ty {
-            fn visit<V: Visitor>(&self, visitor: &mut V) -> <V as Visitor>::Out {
-                visitor.$visit(self)
-            }
-
-            fn map<M: Mapper>(&mut self, mapper: &mut M) -> <M as Mapper>::Out {
-                mapper.$map(self)
-            }
-
-            fn fold<F: Folder>(self, folder: &mut F) -> <F as Folder>::Out {
-                folder.$fold(self)
-            }
-        }
-    };
-}
-
-visitable_leaf!(Epsilon, visit_epsilon, map_epsilon, fold_epsilon);
-visitable_leaf!(Literal, visit_literal, map_literal, fold_literal);
-visitable_leaf!(Cat, visit_cat, map_cat, fold_cat);
-visitable_leaf!(Alt, visit_alt, map_alt, fold_alt);
-visitable_leaf!(Fix, visit_fix, map_fix, fold_fix);
-visitable_leaf!(Variable, visit_variable, map_variable, fold_variable);
-visitable_leaf!(Parameter, visit_parameter, map_parameter, fold_parameter);
-visitable_leaf!(Call, visit_call, map_call, fold_call);
-
-impl Visitable for Expression {
+impl Visitable for NamedExpression {
     fn visit<V: Visitor>(&self, visitor: &mut V) -> <V as Visitor>::Out {
-        match self {
-            Self::Epsilon(e) => visitor.visit_epsilon(e),
-            Self::Literal(l) => visitor.visit_literal(l),
-            Self::Cat(c) => visitor.visit_cat(c),
-            Self::Alt(a) => visitor.visit_alt(a),
-            Self::Fix(f) => visitor.visit_fix(f),
-            Self::Variable(v) => visitor.visit_variable(v),
-            Self::Parameter(p) => visitor.visit_parameter(p),
-            Self::Call(c) => visitor.visit_call(c),
+        match &self.expr {
+            Expression::Epsilon(e) => visitor.visit_epsilon(self.name.as_ref(), self.span, e),
+            Expression::Literal(l) => visitor.visit_literal(self.name.as_ref(), self.span, l),
+            Expression::Cat(c) => visitor.visit_cat(self.name.as_ref(), self.span, c),
+            Expression::Alt(a) => visitor.visit_alt(self.name.as_ref(), self.span, a),
+            Expression::Fix(f) => visitor.visit_fix(self.name.as_ref(), self.span, f),
+            Expression::Variable(v) => visitor.visit_variable(self.name.as_ref(), self.span, v),
+            Expression::Parameter(p) => visitor.visit_parameter(self.name.as_ref(), self.span, p),
+            Expression::Call(c) => visitor.visit_call(self.name.as_ref(), self.span, c),
         }
     }
 
     fn map<M: Mapper>(&mut self, mapper: &mut M) -> <M as Mapper>::Out {
-        match self {
-            Self::Epsilon(e) => mapper.map_epsilon(e),
-            Self::Literal(l) => mapper.map_literal(l),
-            Self::Cat(c) => mapper.map_cat(c),
-            Self::Alt(a) => mapper.map_alt(a),
-            Self::Fix(f) => mapper.map_fix(f),
-            Self::Variable(v) => mapper.map_variable(v),
-            Self::Parameter(p) => mapper.map_parameter(p),
-            Self::Call(c) => mapper.map_call(c),
+        match &mut self.expr {
+            Expression::Epsilon(e) => mapper.map_epsilon(&mut self.name, self.span, e),
+            Expression::Literal(l) => mapper.map_literal(&mut self.name, self.span, l),
+            Expression::Cat(c) => mapper.map_cat(&mut self.name, self.span, c),
+            Expression::Alt(a) => mapper.map_alt(&mut self.name, self.span, a),
+            Expression::Fix(f) => mapper.map_fix(&mut self.name, self.span, f),
+            Expression::Variable(v) => mapper.map_variable(&mut self.name, self.span, v),
+            Expression::Parameter(p) => mapper.map_parameter(&mut self.name, self.span, p),
+            Expression::Call(c) => mapper.map_call(&mut self.name, self.span, c),
         }
     }
 
     fn fold<F: Folder>(self, folder: &mut F) -> <F as Folder>::Out {
-        match self {
-            Self::Epsilon(e) => folder.fold_epsilon(e),
-            Self::Literal(l) => folder.fold_literal(l),
-            Self::Cat(c) => folder.fold_cat(c),
-            Self::Alt(a) => folder.fold_alt(a),
-            Self::Fix(f) => folder.fold_fix(f),
-            Self::Variable(v) => folder.fold_variable(v),
-            Self::Parameter(p) => folder.fold_parameter(p),
-            Self::Call(c) => folder.fold_call(c),
+        match self.expr {
+            Expression::Epsilon(e) => folder.fold_epsilon(self.name, self.span, e),
+            Expression::Literal(l) => folder.fold_literal(self.name, self.span, l),
+            Expression::Cat(c) => folder.fold_cat(self.name, self.span, c),
+            Expression::Alt(a) => folder.fold_alt(self.name, self.span, a),
+            Expression::Fix(f) => folder.fold_fix(self.name, self.span, f),
+            Expression::Variable(v) => folder.fold_variable(self.name, self.span, v),
+            Expression::Parameter(p) => folder.fold_parameter(self.name, self.span, p),
+            Expression::Call(c) => folder.fold_call(self.name, self.span, c),
         }
     }
 }

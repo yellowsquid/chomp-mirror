@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
 
 use syn::punctuated::Pair;
 
-use crate::chomp::ast;
+use crate::chomp::ast::{self, NamedExpression};
 
-use super::cst::{Alt, Call, Cat, Fix, Ident, ParenExpression, Term};
+use super::cst::{Alt, Call, Cat, Fix, Ident, Labelled, ParenExpression, Term};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Binding {
@@ -13,7 +13,7 @@ pub enum Binding {
     Global,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Context {
     names: HashMap<String, Binding>,
     vars: usize,
@@ -62,55 +62,132 @@ impl Context {
     }
 }
 
-pub trait Convert {
-    fn convert(self, context: &mut Context) -> Option<ast::Expression>;
+#[derive(Clone, Debug)]
+pub enum ConvertError {
+    UndeclaredName(Ident),
 }
 
-impl Convert for Ident {
-    fn convert(self, context: &mut Context) -> Option<ast::Expression> {
-        let span = self.span();
-
-        match context.lookup(&self)? {
-            Binding::Variable(index) => Some(ast::Variable::new(self.into(), index).into()),
-            Binding::Parameter(index) => Some(ast::Parameter::new(self.into(), index).into()),
-            Binding::Global => Some(ast::Call::new(self.into(), Vec::new(), Some(span)).into()),
+impl From<ConvertError> for syn::Error {
+    fn from(e: ConvertError) -> Self {
+        match e {
+            ConvertError::UndeclaredName(ident) => {
+                Self::new(ident.span(), "undeclared name")
+            }
         }
     }
 }
 
+impl fmt::Display for ConvertError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UndeclaredName(i) => {
+                let start = i.span().start();
+                write!(
+                    f,
+                    "{}:{}: undeclared name `{}'",
+                    start.line, start.column, i
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConvertError {}
+
+pub trait Convert {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError>;
+}
+
+impl Convert for Ident {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
+        let span = Some(self.span());
+        let binding = match context.lookup(&self) {
+            Some(b) => b,
+            None => return Err(ConvertError::UndeclaredName(self)),
+        };
+        let name = self.into();
+
+        Ok(match binding {
+            Binding::Variable(index) => NamedExpression {
+                name: Some(name),
+                expr: ast::Variable { index }.into(),
+                span,
+            },
+            Binding::Parameter(index) => NamedExpression {
+                name: Some(name),
+                expr: ast::Parameter { index }.into(),
+                span,
+            },
+            Binding::Global => NamedExpression {
+                name: None,
+                expr: ast::Call {
+                    name,
+                    args: Vec::new(),
+                }
+                .into(),
+                span,
+            },
+        })
+    }
+}
+
 impl Convert for Call {
-    fn convert(self, context: &mut Context) -> Option<ast::Expression> {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
         let span = self.span();
         let args = self
             .args
             .into_iter()
             .map(|arg| arg.convert(context))
-            .collect::<Option<_>>()?;
-        Some(ast::Call::new(self.name.into(), args, span).into())
+            .collect::<Result<_, _>>()?;
+        Ok(NamedExpression {
+            name: None,
+            expr: ast::Call {
+                name: self.name.into(),
+                args,
+            }
+            .into(),
+            span,
+        })
     }
 }
 
 impl Convert for Fix {
-    fn convert(self, context: &mut Context) -> Option<ast::Expression> {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
         let span = self.span();
         let expr = self.expr;
         let inner = context.with_variable(&self.arg, |context| expr.convert(context))?;
-        Some(ast::Fix::new(self.arg.into(), inner, span).into())
+        Ok(NamedExpression {
+            name: None,
+            expr: ast::Fix {
+                arg: Some(self.arg.into()),
+                inner: Box::new(inner),
+            }
+            .into(),
+            span,
+        })
     }
 }
 
 impl Convert for ParenExpression {
-    fn convert(self, context: &mut Context) -> Option<ast::Expression> {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
         self.expr.convert(context)
     }
 }
 
 impl Convert for Term {
-    fn convert(self, context: &mut Context) -> Option<ast::Expression> {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
         match self {
-            Self::Epsilon(e) => Some(Some(e).into()),
+            Self::Epsilon(e) => Ok(NamedExpression {
+                name: None,
+                expr: ast::Epsilon.into(),
+                span: Some(e.span),
+            }),
             Self::Ident(i) => i.convert(context),
-            Self::Literal(l) => Some(ast::Literal::from(l).into()),
+            Self::Literal(l) => Ok(NamedExpression {
+                name: None,
+                expr: l.value().into(),
+                span: Some(l.span()),
+            }),
             Self::Call(c) => c.convert(context),
             Self::Fix(f) => f.convert(context),
             Self::Parens(p) => p.convert(context),
@@ -119,47 +196,111 @@ impl Convert for Term {
 }
 
 impl Convert for Cat {
-    fn convert(self, context: &mut Context) -> Option<ast::Expression> {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
         let mut iter = self.0.into_pairs();
-        let mut out = match iter.next().unwrap() {
+
+        let (first, punct) = match iter.next().unwrap() {
             Pair::Punctuated(t, p) => (t.convert(context)?, Some(p)),
             Pair::End(t) => (t.convert(context)?, None),
         };
 
-        for pair in iter {
-            let (fst, punct) = out;
-            out = match pair {
-                Pair::Punctuated(t, p) => (
-                    ast::Cat::new(fst, punct, t.convert(context)?).into(),
-                    Some(p),
-                ),
-                Pair::End(t) => (ast::Cat::new(fst, punct, t.convert(context)?).into(), None),
-            };
-        }
+        let mut rest = Vec::new();
+        let (span, _) = iter.try_fold(
+            (
+                first.span.and_then(|s| punct.and_then(|p| s.join(p.span))),
+                punct,
+            ),
+            |(span, punct), pair| {
+                let (snd, p) = match pair {
+                    Pair::Punctuated(t, p) => (t.convert(context)?, Some(p)),
+                    Pair::End(t) => (t.convert(context)?, None),
+                };
 
-        Some(out.0)
+                let span = span
+                    .and_then(|s| snd.span.and_then(|t| s.join(t)))
+                    .and_then(|s| p.and_then(|p| s.join(p.span)));
+                rest.push((punct, snd));
+                Ok((span, p))
+            },
+        )?;
+
+        let mut iter = rest.into_iter();
+        if let Some((punct, second)) = iter.next() {
+            Ok(NamedExpression {
+                name: None,
+                expr: ast::Cat {
+                    first: Box::new(first),
+                    punct,
+                    second: Box::new(second),
+                    rest: iter.collect(),
+                }
+                .into(),
+                span,
+            })
+        } else {
+            Ok(first)
+        }
+    }
+}
+
+impl Convert for Labelled {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
+        let span = self.span();
+        let named = self.cat.convert(context)?;
+        let name = self.label.map(|l| l.label.into()).or(named.name);
+
+        Ok(NamedExpression {
+            name,
+            expr: named.expr,
+            span,
+        })
     }
 }
 
 impl Convert for Alt {
-    fn convert(self, context: &mut Context) -> Option<ast::Expression> {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
         let mut iter = self.0.into_pairs();
-        let mut out = match iter.next().unwrap() {
+
+        let (first, punct) = match iter.next().unwrap() {
             Pair::Punctuated(t, p) => (t.convert(context)?, Some(p)),
             Pair::End(t) => (t.convert(context)?, None),
         };
 
-        for pair in iter {
-            let (fst, punct) = out;
-            out = match pair {
-                Pair::Punctuated(t, p) => (
-                    ast::Alt::new(fst, punct, t.convert(context)?).into(),
-                    Some(p),
-                ),
-                Pair::End(t) => (ast::Alt::new(fst, punct, t.convert(context)?).into(), None),
-            };
-        }
+        let mut rest = Vec::new();
+        let (span, _) = iter.try_fold(
+            (
+                first.span.and_then(|s| punct.and_then(|p| s.join(p.span))),
+                punct,
+            ),
+            |(span, punct), pair| {
+                let (snd, p) = match pair {
+                    Pair::Punctuated(t, p) => (t.convert(context)?, Some(p)),
+                    Pair::End(t) => (t.convert(context)?, None),
+                };
 
-        Some(out.0)
+                let span = span
+                    .and_then(|s| snd.span.and_then(|t| s.join(t)))
+                    .and_then(|s| p.and_then(|p| s.join(p.span)));
+                rest.push((punct, snd));
+                Ok((span, p))
+            },
+        )?;
+
+        let mut iter = rest.into_iter();
+        if let Some((punct, second)) = iter.next() {
+            Ok(NamedExpression {
+                name: None,
+                expr: ast::Alt {
+                    first: Box::new(first),
+                    punct,
+                    second: Box::new(second),
+                    rest: iter.collect(),
+                }
+                .into(),
+                span,
+            })
+        } else {
+            Ok(first)
+        }
     }
 }

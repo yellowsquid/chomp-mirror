@@ -1,4 +1,6 @@
-use super::{ast::Variable, error::VariableError, typed::Type};
+use crate::chomp::ast::Variable;
+
+use super::Type;
 
 #[derive(Debug, Default)]
 pub struct Context {
@@ -16,14 +18,12 @@ impl Context {
     }
 
     pub fn is_unguarded(&self, var: &Variable) -> Option<bool> {
-        if self.vars.len() <= var.index() {
+        if self.vars.len() <= var.index {
             None
         } else if self.unguard_points.is_empty() {
             Some(false)
         } else {
-            Some(
-                self.unguard_points[self.unguard_points.len() - 1] + var.index() >= self.vars.len(),
-            )
+            Some(self.unguard_points[self.unguard_points.len() - 1] + var.index >= self.vars.len())
         }
     }
 
@@ -34,11 +34,11 @@ impl Context {
         res
     }
 
-    pub fn get_variable_type(&self, var: &Variable) -> Result<&Type, VariableError> {
+    pub fn get_variable_type(&self, var: &Variable) -> Result<&Type, GetVariableError> {
         match self.is_unguarded(var) {
-            None => Err(VariableError::FreeVariable(var.clone())),
-            Some(false) => Err(VariableError::GuardedVariable(var.clone())),
-            Some(true) => Ok(&self.vars[self.vars.len() - var.index() - 1]),
+            None => Err(GetVariableError::FreeVariable),
+            Some(false) => Err(GetVariableError::GuardedVariable),
+            Some(true) => Ok(&self.vars[self.vars.len() - var.index - 1]),
         }
     }
 
@@ -48,4 +48,10 @@ impl Context {
         self.vars.pop();
         res
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GetVariableError {
+    FreeVariable,
+    GuardedVariable,
 }

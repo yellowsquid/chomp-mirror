@@ -1,12 +1,10 @@
 use std::{fmt, hash};
 
+use heck::{CamelCase, SnakeCase};
 use proc_macro2::{Ident, Span};
 use syn::ext::IdentExt;
 
 pub mod ast;
-pub mod check;
-pub mod context;
-pub mod error;
 pub mod set;
 pub mod typed;
 pub mod visit;
@@ -25,10 +23,40 @@ impl Name {
         }
     }
 
-    pub fn as_ident(self, span: Span) -> Ident {
+    pub fn into_ident(self, span: Span) -> Ident {
         match self {
             Self::Spanned(i) => i,
             Self::Spanless(s) => Ident::new(&s, span),
+        }
+    }
+}
+
+impl CamelCase for Name {
+    fn to_camel_case(&self) -> Self::Owned {
+        match self {
+            Self::Spanned(ident) => {
+                let span = ident.span();
+                let name = ident.unraw().to_string();
+                Ident::new(&name.to_camel_case(), span).into()
+            }
+            Name::Spanless(name) => {
+                name.to_camel_case().into()
+            }
+        }
+    }
+}
+
+impl SnakeCase for Name {
+    fn to_snake_case(&self) -> Self::Owned {
+        match self {
+            Self::Spanned(ident) => {
+                let span = ident.span();
+                let name = ident.unraw().to_string();
+                Ident::new(&name.to_snake_case(), span).into()
+            }
+            Name::Spanless(name) => {
+                name.to_snake_case().into()
+            }
         }
     }
 }

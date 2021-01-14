@@ -5,15 +5,7 @@ use std::{
     process::exit,
 };
 
-use chomp::{
-    chomp::{
-        check::{InlineCalls, TypeCheck},
-        context::Context,
-        visit::Visitable,
-    },
-    lower::{rust::RustBackend, Backend, GenerateCode},
-    nibble::cst::File,
-};
+use chomp::{chomp::{ast::substitute::InlineCalls, typed::{TypeInfer, context::Context, lower::{Backend, GenerateCode}}, visit::Visitable}, lower::RustBackend, nibble::cst::File};
 
 #[derive(Debug)]
 struct UndecVar;
@@ -31,17 +23,17 @@ fn main() {
         .read_to_string(&mut input)
         .map_err(|e| Box::new(e) as Box<dyn Error>)
         .and_then(|_| syn::parse_str(&input).map_err(|e| Box::new(e) as Box<dyn Error>))
-        .and_then(|nibble: File| nibble.convert().ok_or(Box::new(UndecVar) as Box<dyn Error>))
+        .and_then(|nibble: File| nibble.convert().map_err(|e| Box::new(e) as Box<dyn Error>))
         .and_then(|(funs, goal)| {
             funs.into_iter()
                 .try_rfold(goal, |goal, function| {
-                    goal.fold(&mut InlineCalls::new(function))
+                    goal.fold(&mut InlineCalls { function })
                 })
                 .map_err(|e| Box::new(e) as Box<dyn Error>)
         })
         .and_then(|term| {
             let mut context = Context::default();
-            term.fold(&mut TypeCheck {
+            term.fold(&mut TypeInfer {
                 context: &mut context,
             })
             .map_err(|e| Box::new(e) as Box<dyn Error>)
@@ -49,7 +41,7 @@ fn main() {
         .map(|typed| {
             let mut backend = RustBackend::default();
             let id = typed.gen(&mut backend);
-            backend.emit_code(id)
+            backend.emit_code(None, None, id)
         })
         .and_then(|code| {
             write!(io::stdout(), "{:#}", code).map_err(|e| Box::new(e) as Box<dyn Error>)

@@ -4,14 +4,14 @@ use syn::{
     ext::IdentExt,
     parenthesized,
     parse::{Parse, ParseStream},
-    punctuated::Punctuated,
+    punctuated::{Pair, Punctuated},
     token::{Bracket, Comma, Let, Match, Paren},
     LitStr, Token,
 };
 
-use crate::chomp::ast;
+use crate::chomp::{Name, ast};
 
-use super::convert::{Context, Convert};
+use super::convert::{Context, Convert, ConvertError};
 
 pub type Epsilon = Token![_];
 
@@ -134,6 +134,19 @@ pub enum Term {
     Parens(ParenExpression),
 }
 
+impl Term {
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            Self::Epsilon(e) => Some(e.span),
+            Self::Ident(i) => Some(i.span()),
+            Self::Literal(l) => Some(l.span()),
+            Self::Call(c) => c.span(),
+            Self::Fix(f) => f.span(),
+            Self::Parens(p) => Some(p.paren_token.span),
+        }
+    }
+}
+
 impl Parse for Term {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let lookahead = input.lookahead1();
@@ -169,8 +182,74 @@ impl Parse for Cat {
     }
 }
 
+impl Cat {
+    pub fn span(&self) -> Option<Span> {
+        let mut iter = self.0.pairs();
+        let span = match iter.next()? {
+            Pair::Punctuated(t, p) => t.span().and_then(|s| s.join(p.span)),
+            Pair::End(t) => t.span(),
+        }?;
+
+        iter.try_fold(span, |span, pair| match pair {
+            Pair::Punctuated(t, p) => t
+                .span()
+                .and_then(|s| span.join(s))
+                .and_then(|s| s.join(p.span)),
+            Pair::End(t) => t.span().and_then(|s| span.join(s)),
+        })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Alt(pub Punctuated<Cat, Token![|]>);
+pub struct Label {
+    colon_tok: Token![:],
+    pub label: Ident,
+}
+
+impl Label {
+    pub fn span(&self) -> Option<Span> {
+        self.colon_tok.span.join(self.label.span())
+    }
+}
+
+impl Parse for Label {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let colon_tok = input.parse()?;
+        let label = input.call(Ident::parse_any)?;
+        Ok(Self { colon_tok, label })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Labelled {
+    pub cat: Cat,
+    pub label: Option<Label>,
+}
+
+impl Labelled {
+    pub fn span(&self) -> Option<Span> {
+        self.cat.span().and_then(|s| {
+            self.label
+                .as_ref()
+                .and_then(|l| l.span().and_then(|t| s.join(t)))
+        })
+    }
+}
+
+impl Parse for Labelled {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let cat = input.parse()?;
+        let label = if input.peek(Token![:]) {
+            Some(input.parse()?)
+        } else {
+            None
+        };
+        Ok(Self { cat, label })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Alt(pub Punctuated<Labelled, Token![|]>);
 
 impl Parse for Alt {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -248,28 +327,28 @@ pub struct File {
 }
 
 impl File {
-    pub fn convert(self) -> Option<(Vec<ast::Function>, ast::Expression)> {
+    pub fn convert(self) -> Result<(Vec<ast::Function>, ast::NamedExpression), ConvertError> {
         let mut names = Vec::new();
         let mut map = Vec::new();
         for stmt in self.lets {
-            let count = stmt.args.as_ref().map(ArgList::len).unwrap_or_default();
             let span = stmt.span();
-            let mut context = Context::new(
-                &names,
-                stmt.args.into_iter().flat_map(|args| args.into_iter()),
-            );
+            let params = stmt.args.into_iter().flat_map(|args| args.into_iter());
+            let mut context = Context::new(&names, params.clone());
             names.push(stmt.name.clone());
-            map.push(ast::Function::new(
-                stmt.name.into(),
-                count,
-                stmt.expr.convert(&mut context)?,
+            let mut expr = stmt.expr.convert(&mut context)?;
+            let name: Name = stmt.name.into();
+            expr.name = Some(name.clone());
+            map.push(ast::Function {
+                name,
+                params: params.map(|name| Some(name.into())).collect(),
+                expr,
                 span,
-            ));
+            });
         }
 
         let mut context = Context::new(&names, Vec::new());
         let goal = self.goal.expr.convert(&mut context)?;
-        Some((map, goal))
+        Ok((map, goal))
     }
 }
 
