@@ -10,4 +10,5 @@ features = ["extra-traits"]
 
 [dependencies]
 chewed = {path = "../chewed"}
+chomp = {path = "../"}
 chomp-macro = {path = "../chomp-macro"}

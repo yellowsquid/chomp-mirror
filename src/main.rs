@@ -1,21 +1,22 @@
 use std::{
     error::Error,
-    fmt::Display,
     io::{self, Read, Write},
     process::exit,
 };
 
-use chomp::{chomp::{ast::substitute::InlineCalls, typed::{TypeInfer, context::Context, lower::{Backend, GenerateCode}}, visit::Visitable}, lower::RustBackend, nibble::cst::File};
-
-#[derive(Debug)]
-struct UndecVar;
-
-impl Display for UndecVar {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Undeclared variable somewhere.")
-    }
-}
-impl Error for UndecVar {}
+use chomp::{
+    chomp::{
+        ast::substitute::InlineCalls,
+        typed::{
+            context::Context,
+            lower::{Backend, GenerateCode},
+            TypeInfer,
+        },
+        visit::Visitable,
+    },
+    lower::RustBackend,
+    nibble::cst::File,
+};
 
 fn main() {
     let mut input = String::new();

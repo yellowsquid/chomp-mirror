@@ -9,7 +9,7 @@ use syn::{
     LitStr, Token,
 };
 
-use crate::chomp::{Name, ast};
+use crate::chomp::{ast, Name};
 
 use super::convert::{Context, Convert, ConvertError};
 
@@ -332,15 +332,19 @@ impl File {
         let mut map = Vec::new();
         for stmt in self.lets {
             let span = stmt.span();
-            let params = stmt.args.into_iter().flat_map(|args| args.into_iter());
-            let mut context = Context::new(&names, params.clone());
-            names.push(stmt.name.clone());
-            let mut expr = stmt.expr.convert(&mut context)?;
             let name: Name = stmt.name.into();
+            let params = stmt
+                .args
+                .into_iter()
+                .flat_map(|args| args.into_iter())
+                .map(Name::from);
+            let mut context = Context::new(&names, params.clone());
+            let mut expr = stmt.expr.convert(&mut context)?;
+            names.push(name.clone());
             expr.name = Some(name.clone());
             map.push(ast::Function {
                 name,
-                params: params.map(|name| Some(name.into())).collect(),
+                params: params.map(Some).collect(),
                 expr,
                 span,
             });

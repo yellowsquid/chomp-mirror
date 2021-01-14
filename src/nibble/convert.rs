@@ -1,8 +1,12 @@
 use std::{collections::HashMap, fmt};
 
+use proc_macro2::Span;
 use syn::punctuated::Pair;
 
-use crate::chomp::ast::{self, NamedExpression};
+use crate::chomp::{
+    ast::{self, NamedExpression},
+    Name,
+};
 
 use super::cst::{Alt, Call, Cat, Fix, Ident, Labelled, ParenExpression, Term};
 
@@ -20,7 +24,7 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn new<I: IntoIterator<Item = Ident>>(globals: &[Ident], params: I) -> Self {
+    pub fn new<I: IntoIterator<Item = Name>>(globals: &[Name], params: I) -> Self {
         let mut names = HashMap::new();
         for global in globals {
             names.insert(global.to_string(), Binding::Global);
@@ -33,7 +37,7 @@ impl Context {
         Self { names, vars: 0 }
     }
 
-    pub fn lookup(&self, name: &Ident) -> Option<Binding> {
+    pub fn lookup(&self, name: &Name) -> Option<Binding> {
         // we make variable binding cheaper by inserting wrong and pulling right.
         match self.names.get(&name.to_string()).copied() {
             Some(Binding::Variable(index)) => Some(Binding::Variable(self.vars - index - 1)),
@@ -41,7 +45,7 @@ impl Context {
         }
     }
 
-    pub fn with_variable<F: FnOnce(&mut Self) -> R, R>(&mut self, name: &Ident, f: F) -> R {
+    pub fn with_variable<F: FnOnce(&mut Self) -> R, R>(&mut self, name: &Name, f: F) -> R {
         let old = self
             .names
             .insert(name.to_string(), Binding::Variable(self.vars));
@@ -64,13 +68,14 @@ impl Context {
 
 #[derive(Clone, Debug)]
 pub enum ConvertError {
-    UndeclaredName(Ident),
+    UndeclaredName(Name),
 }
 
 impl From<ConvertError> for syn::Error {
     fn from(e: ConvertError) -> Self {
         match e {
-            ConvertError::UndeclaredName(ident) => {
+            ConvertError::UndeclaredName(name) => {
+                let ident = name.into_ident(Span::call_site());
                 Self::new(ident.span(), "undeclared name")
             }
         }
@@ -80,12 +85,12 @@ impl From<ConvertError> for syn::Error {
 impl fmt::Display for ConvertError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UndeclaredName(i) => {
-                let start = i.span().start();
+            Self::UndeclaredName(name) => {
+                let start = name.span().unwrap_or_else(Span::call_site).start();
                 write!(
                     f,
                     "{}:{}: undeclared name `{}'",
-                    start.line, start.column, i
+                    start.line, start.column, name
                 )
             }
         }
@@ -101,11 +106,11 @@ pub trait Convert {
 impl Convert for Ident {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
         let span = Some(self.span());
-        let binding = match context.lookup(&self) {
-            Some(b) => b,
-            None => return Err(ConvertError::UndeclaredName(self)),
-        };
         let name = self.into();
+
+        let binding = context
+            .lookup(&name)
+            .ok_or_else(|| ConvertError::UndeclaredName(name.clone()))?;
 
         Ok(match binding {
             Binding::Variable(index) => NamedExpression {
@@ -155,11 +160,12 @@ impl Convert for Fix {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
         let span = self.span();
         let expr = self.expr;
-        let inner = context.with_variable(&self.arg, |context| expr.convert(context))?;
+        let arg = self.arg.into();
+        let inner = context.with_variable(&arg, |context| expr.convert(context))?;
         Ok(NamedExpression {
             name: None,
             expr: ast::Fix {
-                arg: Some(self.arg.into()),
+                arg: Some(arg),
                 inner: Box::new(inner),
             }
             .into(),
