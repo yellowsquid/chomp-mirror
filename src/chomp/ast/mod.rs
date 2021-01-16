@@ -8,7 +8,7 @@ use super::Name;
 pub mod error;
 pub mod substitute;
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub struct Epsilon;
 
 pub type Literal = String;
@@ -102,7 +102,7 @@ impl PartialEq for Fix {
 
 impl Eq for Fix {}
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Variable {
     pub index: usize,
 }
@@ -113,7 +113,7 @@ impl Display for Variable {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Parameter {
     pub index: usize,
 }
