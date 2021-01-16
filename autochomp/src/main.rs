@@ -18,8 +18,6 @@ use chomp::{
     lower::RustBackend,
 };
 
-mod nibble;
-
 fn main() {
     let mut input = String::new();
     let res = io::stdin()
@@ -27,7 +25,7 @@ fn main() {
         .map_err(|e| Box::new(e) as Box<dyn Error>)
         .and_then(|_| {
             IterWrapper::new(input.chars())
-                .parse::<nibble::Ast>()
+                .parse::<autochomp::Ast>()
                 .map_err(|e| Box::new(e) as Box<dyn Error>)
         })
         .and_then(|ast| ast.convert().map_err(|e| Box::new(e) as Box<dyn Error>))
