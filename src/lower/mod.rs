@@ -40,6 +40,8 @@ pub struct RustBackend {
     context: Vec<usize>,
 }
 
+type NamedSpan = (Option<Name>, Span);
+
 impl RustBackend {
     fn new_type_name(&mut self, prefix: &str, name: Option<Name>, span: Span) -> (usize, Ident) {
         let id = self.data.len();
@@ -58,7 +60,7 @@ impl RustBackend {
     fn recurse_exprs<I: IntoIterator<Item = TypedExpression>>(
         &mut self,
         iter: I,
-    ) -> (Vec<Type>, Vec<(Option<Name>, Span)>, Vec<usize>) {
+    ) -> (Vec<Type>, Vec<NamedSpan>, Vec<usize>) {
         let (ty_name_span, ids): (Vec<_>, _) = iter
             .into_iter()
             .map(|e| {
@@ -97,7 +99,7 @@ impl RustBackend {
         iter.into_iter().map(move |id| self.data[id].name.clone())
     }
 
-    fn name_parts_snake<'a, I: 'a + IntoIterator<Item = (Option<Name>, Span)>>(
+    fn name_parts_snake<'a, I: 'a + IntoIterator<Item = NamedSpan>>(
         default: &'a str,
         iter: I,
     ) -> impl Iterator<Item = Ident> + '_ {
@@ -115,7 +117,7 @@ impl RustBackend {
             })
     }
 
-    fn name_parts_camel<'a, I: 'a + IntoIterator<Item = (Option<Name>, Span)>>(
+    fn name_parts_camel<'a, I: 'a + IntoIterator<Item = NamedSpan>>(
         default: &'a str,
         iter: I,
     ) -> impl Iterator<Item = Ident> + '_ {
@@ -426,7 +428,7 @@ impl Backend for RustBackend {
         id
     }
 
-    fn gen_variable(&mut self, name: Option<Name>, span: Option<Span>, var: Variable) -> Self::Id {
+    fn gen_variable(&mut self, _name: Option<Name>, span: Option<Span>, var: Variable) -> Self::Id {
         let span = span.unwrap_or_else(Span::call_site);
         let fix_id = self.context[self.context.len() - var.index() - 1];
 
@@ -436,7 +438,7 @@ impl Backend for RustBackend {
 
         let id = self.data.len();
         let fix_ty = self.data[fix_id].name.clone();
-        let name = quote! {Box<#fix_ty>};
+        let name = quote_spanned! {span=> Box<#fix_ty>};
         self.var_map.insert(fix_id, id);
         self.data.push(Ty {
             name,
