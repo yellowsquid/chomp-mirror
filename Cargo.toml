@@ -9,9 +9,6 @@ members = ["autochomp", "chewed", "chomp-macro"]
 
 [dependencies]
 heck = "0.3.2"
+proc-macro2 = "1.0.24"
 quote = "1.0.8"
 syn = "1.0.58"
-
-[dependencies.proc-macro2]
-version = "1.0.24"
-features = ["span-locations"]

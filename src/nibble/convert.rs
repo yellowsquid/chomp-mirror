@@ -73,12 +73,12 @@ pub enum ConvertError {
 
 impl From<ConvertError> for syn::Error {
     fn from(e: ConvertError) -> Self {
-        match e {
-            ConvertError::UndeclaredName(name) => {
-                let ident = name.into_ident(Span::call_site());
-                Self::new(ident.span(), "undeclared name")
-            }
-        }
+        let msg = e.to_string();
+        let span = match e {
+            ConvertError::UndeclaredName(name) => name.span(),
+        };
+
+        Self::new(span.unwrap_or_else(Span::call_site), msg)
     }
 }
 
@@ -86,12 +86,7 @@ impl fmt::Display for ConvertError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UndeclaredName(name) => {
-                let start = name.span().unwrap_or_else(Span::call_site).start();
-                write!(
-                    f,
-                    "{}:{}: undeclared name `{}'",
-                    start.line, start.column, name
-                )
+                write!(f, "undeclared name: `{}`", name)
             }
         }
     }
