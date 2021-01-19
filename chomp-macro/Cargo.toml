@@ -8,7 +8,7 @@ edition = "2018"
 chomp = {path = ".."}
 
 [dependencies.syn]
-version = "1"
+version = "1.0.58"
 features = ["parsing", "proc-macro"]
 
 [dev-dependencies]

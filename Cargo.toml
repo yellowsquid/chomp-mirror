@@ -8,13 +8,13 @@ edition = "2018"
 members = ["autochomp", "chewed", "chomp-macro"]
 
 [dependencies]
-heck = "0.3"
-quote = "1"
+heck = "0.3.2"
+quote = "1.0.8"
 
 [dependencies.proc-macro2]
-version = "1"
+version = "1.0.24"
 features = ["span-locations"]
 
 [dependencies.syn]
-version = "1"
+version = "1.0.58"
 features = ["extra-traits"]
