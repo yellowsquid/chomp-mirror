@@ -206,25 +206,25 @@ impl Convert for Cat {
         let mut iter = self.0.into_pairs();
 
         let (first, punct) = match iter.next().unwrap() {
-            Pair::Punctuated(t, p) => (t.convert(context)?, Some(p)),
+            Pair::Punctuated(t, p) => (t.convert(context)?, Some(p.span)),
             Pair::End(t) => (t.convert(context)?, None),
         };
 
         let mut rest = Vec::new();
         let (span, _) = iter.try_fold(
             (
-                first.span.and_then(|s| punct.and_then(|p| s.join(p.span))),
+                first.span.and_then(|s| punct.and_then(|p| s.join(p))),
                 punct,
             ),
             |(span, punct), pair| {
                 let (snd, p) = match pair {
-                    Pair::Punctuated(t, p) => (t.convert(context)?, Some(p)),
+                    Pair::Punctuated(t, p) => (t.convert(context)?, Some(p.span)),
                     Pair::End(t) => (t.convert(context)?, None),
                 };
 
                 let span = span
                     .and_then(|s| snd.span.and_then(|t| s.join(t)))
-                    .and_then(|s| p.and_then(|p| s.join(p.span)));
+                    .and_then(|s| p.and_then(|p| s.join(p)));
                 rest.push((punct, snd));
                 Ok((span, p))
             },
@@ -268,25 +268,25 @@ impl Convert for Alt {
         let mut iter = self.0.into_pairs();
 
         let (first, punct) = match iter.next().unwrap() {
-            Pair::Punctuated(t, p) => (t.convert(context)?, Some(p)),
+            Pair::Punctuated(t, p) => (t.convert(context)?, Some(p.span)),
             Pair::End(t) => (t.convert(context)?, None),
         };
 
         let mut rest = Vec::new();
         let (span, _) = iter.try_fold(
             (
-                first.span.and_then(|s| punct.and_then(|p| s.join(p.span))),
+                first.span.and_then(|s| punct.and_then(|p| s.join(p))),
                 punct,
             ),
             |(span, punct), pair| {
                 let (snd, p) = match pair {
-                    Pair::Punctuated(t, p) => (t.convert(context)?, Some(p)),
+                    Pair::Punctuated(t, p) => (t.convert(context)?, Some(p.span)),
                     Pair::End(t) => (t.convert(context)?, None),
                 };
 
                 let span = span
                     .and_then(|s| snd.span.and_then(|t| s.join(t)))
-                    .and_then(|s| p.and_then(|p| s.join(p.span)));
+                    .and_then(|s| p.and_then(|p| s.join(p)));
                 rest.push((punct, snd));
                 Ok((span, p))
             },

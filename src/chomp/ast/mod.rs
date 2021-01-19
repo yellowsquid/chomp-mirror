@@ -1,7 +1,6 @@
 use std::fmt::{self, Display};
 
 use proc_macro2::Span;
-use syn::Token;
 
 use super::Name;
 
@@ -16,9 +15,9 @@ pub type Literal = String;
 #[derive(Clone, Debug)]
 pub struct Cat {
     pub first: Box<NamedExpression>,
-    pub punct: Option<Token![.]>,
+    pub punct: Option<Span>,
     pub second: Box<NamedExpression>,
-    pub rest: Vec<(Option<Token![.]>, NamedExpression)>,
+    pub rest: Vec<(Option<Span>, NamedExpression)>,
 }
 
 impl Display for Cat {
@@ -49,9 +48,9 @@ impl Eq for Cat {}
 #[derive(Clone, Debug)]
 pub struct Alt {
     pub first: Box<NamedExpression>,
-    pub punct: Option<Token![|]>,
+    pub punct: Option<Span>,
     pub second: Box<NamedExpression>,
-    pub rest: Vec<(Option<Token![|]>, NamedExpression)>
+    pub rest: Vec<(Option<Span>, NamedExpression)>
 }
 
 impl Display for Alt {

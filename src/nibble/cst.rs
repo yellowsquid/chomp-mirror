@@ -19,7 +19,7 @@ pub type Ident = syn::Ident;
 
 pub type Literal = LitStr;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct ArgList<T> {
     paren_token: Paren,
     args: Punctuated<T, Comma>,
@@ -58,7 +58,7 @@ impl<T: Parse> Parse for ArgList<T> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct Call {
     pub name: Ident,
     pub args: ArgList<Expression>,
@@ -78,7 +78,7 @@ impl Parse for Call {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct Fix {
     bracket_token: Bracket,
     pub arg: Ident,
@@ -109,7 +109,7 @@ impl Parse for Fix {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct ParenExpression {
     paren_token: Paren,
     pub expr: Expression,
@@ -124,7 +124,7 @@ impl Parse for ParenExpression {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub enum Term {
     Epsilon(Epsilon),
     Ident(Ident),
@@ -173,7 +173,7 @@ impl Parse for Term {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct Cat(pub Punctuated<Term, Token![.]>);
 
 impl Parse for Cat {
@@ -200,7 +200,7 @@ impl Cat {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct Label {
     colon_tok: Token![:],
     pub label: Ident,
@@ -220,7 +220,7 @@ impl Parse for Label {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct Labelled {
     pub cat: Cat,
     pub label: Option<Label>,
@@ -248,7 +248,7 @@ impl Parse for Labelled {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct Alt(pub Punctuated<Labelled, Token![|]>);
 
 impl Parse for Alt {
@@ -259,7 +259,7 @@ impl Parse for Alt {
 
 pub type Expression = Alt;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct LetStatement {
     let_token: Token![let],
     name: Ident,
@@ -299,7 +299,7 @@ impl Parse for LetStatement {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct GoalStatement {
     match_token: Token![match],
     expr: Expression,
@@ -320,7 +320,7 @@ impl Parse for GoalStatement {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct File {
     lets: Vec<LetStatement>,
     goal: GoalStatement,

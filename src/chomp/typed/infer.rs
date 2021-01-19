@@ -48,11 +48,11 @@ impl Folder for TypeInfer<'_> {
                 let rest = rest
                     .into_iter()
                     .map(|(punct, term)| -> Result<_, TypeError> {
-                        Ok((punct.map(|p| p.span), term.fold(&mut infer)?))
+                        Ok((punct, term.fold(&mut infer)?))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(TypedExpression {
-                    inner: super::Cat::new(first, punct.map(|p| p.span), second, rest)?.into(),
+                    inner: super::Cat::new(first, punct, second, rest)?.into(),
                     name,
                     span,
                 })
@@ -71,11 +71,11 @@ impl Folder for TypeInfer<'_> {
                 let rest = rest
                     .into_iter()
                     .map(|(punct, term)| -> Result<_, TypeError> {
-                        Ok((punct.map(|p| p.span), term.fold(&mut infer)?))
+                        Ok((punct, term.fold(&mut infer)?))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(TypedExpression {
-                    inner: super::Alt::new(first, punct.map(|p| p.span), second, rest)?.into(),
+                    inner: super::Alt::new(first, punct, second, rest)?.into(),
                     name,
                     span,
                 })
