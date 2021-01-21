@@ -1,3 +1,5 @@
+use std::fmt;
+
 use proc_macro2::Span;
 use syn::{
     bracketed,
@@ -58,7 +60,14 @@ impl<T: Parse> Parse for ArgList<T> {
     }
 }
 
-#[derive(Clone)]
+impl<T: fmt::Debug> fmt::Debug for ArgList<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ArgList")?;
+        f.debug_list().entries(self.args.iter()).finish()
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Call {
     pub name: Ident,
     pub args: ArgList<Expression>,
@@ -109,6 +118,15 @@ impl Parse for Fix {
     }
 }
 
+impl fmt::Debug for Fix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Fix")
+            .field("arg", &self.arg)
+            .field("expr", &self.expr)
+            .finish()
+    }
+}
+
 #[derive(Clone)]
 pub struct ParenExpression {
     paren_token: Paren,
@@ -121,6 +139,14 @@ impl Parse for ParenExpression {
         let paren_token = parenthesized!(expr in input);
         let expr = expr.parse()?;
         Ok(Self { paren_token, expr })
+    }
+}
+
+impl fmt::Debug for ParenExpression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParenExpression")
+            .field("expr", &self.expr)
+            .finish()
     }
 }
 
@@ -173,6 +199,19 @@ impl Parse for Term {
     }
 }
 
+impl fmt::Debug for Term {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Term::Epsilon(_) => write!(f, "Term::Epsilon"),
+            Term::Ident(i) => write!(f, "Term::Ident({:?})", i),
+            Term::Literal(l) => write!(f, "Term::Literal({:?})", l.value()),
+            Term::Call(c) => write!(f, "Term::Call({:?})", c),
+            Term::Fix(x) => write!(f, "Term::Fix({:?})", x),
+            Term::Parens(p) => write!(f, "Term::Parens({:?})", p),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Cat(pub Punctuated<Term, Token![.]>);
 
@@ -200,6 +239,13 @@ impl Cat {
     }
 }
 
+impl fmt::Debug for Cat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Cat")?;
+        f.debug_list().entries(self.0.iter()).finish()
+    }
+}
+
 #[derive(Clone)]
 pub struct Label {
     colon_tok: Token![:],
@@ -220,7 +266,13 @@ impl Parse for Label {
     }
 }
 
-#[derive(Clone)]
+impl fmt::Debug for Label {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Label").field("label", &self.label).finish()
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Labelled {
     pub cat: Cat,
     pub label: Option<Label>,
@@ -251,9 +303,34 @@ impl Parse for Labelled {
 #[derive(Clone)]
 pub struct Alt(pub Punctuated<Labelled, Token![|]>);
 
+impl Alt {
+    pub fn span(&self) -> Option<Span> {
+        let mut iter = self.0.pairs();
+        let span = match iter.next()? {
+            Pair::Punctuated(t, p) => t.span().and_then(|s| s.join(p.span)),
+            Pair::End(t) => t.span(),
+        }?;
+
+        iter.try_fold(span, |span, pair| match pair {
+            Pair::Punctuated(t, p) => t
+                .span()
+                .and_then(|s| span.join(s))
+                .and_then(|s| s.join(p.span)),
+            Pair::End(t) => t.span().and_then(|s| span.join(s)),
+        })
+    }
+}
+
 impl Parse for Alt {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         input.call(Punctuated::parse_separated_nonempty).map(Self)
+    }
+}
+
+impl fmt::Debug for Alt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Alt")?;
+        f.debug_list().entries(self.0.iter()).finish()
     }
 }
 
@@ -299,6 +376,16 @@ impl Parse for LetStatement {
     }
 }
 
+impl fmt::Debug for LetStatement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LetStatement")
+            .field("name", &self.name)
+            .field("args", &self.args)
+            .field("expr", &self.expr)
+            .finish()
+    }
+}
+
 #[derive(Clone)]
 pub struct GoalStatement {
     match_token: Token![match],
@@ -320,7 +407,15 @@ impl Parse for GoalStatement {
     }
 }
 
-#[derive(Clone)]
+impl fmt::Debug for GoalStatement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GoalStatement")
+            .field("expr", &self.expr)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct File {
     lets: Vec<LetStatement>,
     goal: GoalStatement,
@@ -336,7 +431,7 @@ impl File {
             let params = stmt
                 .args
                 .into_iter()
-                .flat_map(|args| args.into_iter())
+                .flat_map(ArgList::into_iter)
                 .map(Name::from);
             let mut context = Context::new(&names, params.clone());
             let mut expr = stmt.expr.convert(&mut context)?;

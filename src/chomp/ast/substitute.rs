@@ -418,13 +418,7 @@ impl Folder for InlineCalls {
                 expr: call.into(),
                 span,
             })
-        } else if call.args.len() != self.function.params.len() {
-            Err(SubstituteError::WrongArgCount {
-                call,
-                expected: self.function.params.len(),
-                span,
-            })
-        } else {
+        } else if call.args.len() == self.function.params.len() {
             let mut expr = self
                 .function
                 .expr
@@ -434,6 +428,12 @@ impl Folder for InlineCalls {
             expr.span = expr.span.or(span);
 
             Ok(expr)
+        } else {
+            Err(SubstituteError::WrongArgCount {
+                call,
+                expected: self.function.params.len(),
+                span,
+            })
         }
     }
 }

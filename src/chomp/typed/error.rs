@@ -18,91 +18,105 @@ pub struct VariableError {
     pub name: Option<Name>,
 }
 
-impl PartialEq for VariableError {
-    fn eq(&self, other: &Self) -> bool {
-        todo!()
-    }
-}
-
-impl Eq for VariableError {}
-
 impl From<VariableError> for syn::Error {
     fn from(other: VariableError) -> Self {
-        todo!()
+        let msg = other.to_string();
+        let span = other.span;
+        Self::new(span.unwrap_or_else(Span::call_site), msg)
     }
 }
 
 impl Display for VariableError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+        match &self.inner {
+            GetVariableError::FreeVariable => write!(f, "unbound variable: "),
+            GetVariableError::GuardedVariable => write!(f, "usage of guarded variable: "),
+        }?;
+
+        if let Some(name) = &self.name {
+            write!(f, "`{}`", name)
+        } else {
+            write!(f, "'{}", self.var.index)
+        }
     }
 }
 
 impl Error for VariableError {}
 
-/// A type error when concatenating two terms.
 #[derive(Debug)]
 pub enum CatError {
-    /// The first term was unexpectedly nullable.
-    FirstNullable(TypedExpression, Option<Span>),
-    /// The flast set of the first term intersects the first set of the second.
-    FirstFlastOverlap(Vec<TypedExpression>, Option<Span>, TypedExpression),
+    FirstNullable {
+        expr: TypedExpression,
+        punct: Option<Span>,
+    },
+    FirstFlastOverlap {
+        first: Vec<TypedExpression>,
+        punct: Option<Span>,
+        next: TypedExpression,
+    },
 }
-
-impl PartialEq for CatError {
-    fn eq(&self, other: &Self) -> bool {
-        todo!()
-    }
-}
-
-impl Eq for CatError {}
 
 impl From<CatError> for syn::Error {
     fn from(other: CatError) -> Self {
-        todo!()
+        let msg = other.to_string();
+        let span = match other {
+            CatError::FirstNullable { punct, .. } | CatError::FirstFlastOverlap { punct, .. } => {
+                punct
+            }
+        };
+        Self::new(span.unwrap_or_else(Span::call_site), msg)
     }
 }
 
 impl Display for CatError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+        match self {
+            Self::FirstNullable { .. } => write!(f, "first part of concatenation is nullable"),
+            Self::FirstFlastOverlap { .. } => {
+                write!(f, "first set overlaps with preceding flast set")
+            }
+        }
     }
 }
 
 impl Error for CatError {}
 
-/// A type error when alternating two terms.
 #[derive(Debug)]
 pub enum AltError {
-    /// Both terms are nullable.
-    BothNullable(Vec<TypedExpression>, Option<Span>, TypedExpression),
-    /// The first sets of the two terms intersect.
-    FirstOverlap(Vec<TypedExpression>, Option<Span>, TypedExpression),
+    BothNullable {
+        left: Vec<TypedExpression>,
+        punct: Option<Span>,
+        right: TypedExpression,
+    },
+    FirstOverlap {
+        left: Vec<TypedExpression>,
+        punct: Option<Span>,
+        right: TypedExpression,
+    },
 }
-
-impl PartialEq for AltError {
-    fn eq(&self, other: &Self) -> bool {
-        todo!()
-    }
-}
-
-impl Eq for AltError {}
 
 impl From<AltError> for syn::Error {
     fn from(other: AltError) -> Self {
-        todo!()
+        let msg = other.to_string();
+        let span = match other {
+            AltError::BothNullable { punct, .. } | AltError::FirstOverlap { punct, .. } => punct,
+        };
+        Self::new(span.unwrap_or_else(Span::call_site), msg)
     }
 }
 
 impl Display for AltError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+        match self {
+            Self::BothNullable { .. } => write!(f, "both branches are nullable"),
+            Self::FirstOverlap { .. } => write!(f, "first sets of both branches overlap"),
+        }
     }
 }
 
 impl Error for AltError {}
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum TypeError {
     Cat(CatError),
     Alt(AltError),

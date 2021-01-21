@@ -1,7 +1,7 @@
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, mem};
 
 use proc_macro2::Span;
-use syn::punctuated::Pair;
+use syn::{punctuated::Pair, Token};
 
 use crate::chomp::{
     ast::{self, NamedExpression},
@@ -41,7 +41,9 @@ impl Context {
         // we make variable binding cheaper by inserting wrong and pulling right.
         match self.names.get(&name.to_string()).copied() {
             Some(Binding::Variable(index)) => Some(Binding::Variable(self.vars - index - 1)),
-            x => x,
+            Some(Binding::Parameter(index)) => Some(Binding::Parameter(index)),
+            Some(Binding::Global) => Some(Binding::Global),
+            None => None,
         }
     }
 
@@ -68,7 +70,9 @@ impl Context {
 
 #[derive(Clone, Debug)]
 pub enum ConvertError {
-    UndeclaredName(Name),
+    UndeclaredName(Box<Name>),
+    EmptyCat(Option<Span>),
+    EmptyAlt(Option<Span>),
 }
 
 impl From<ConvertError> for syn::Error {
@@ -76,6 +80,7 @@ impl From<ConvertError> for syn::Error {
         let msg = e.to_string();
         let span = match e {
             ConvertError::UndeclaredName(name) => name.span(),
+            ConvertError::EmptyCat(span) | ConvertError::EmptyAlt(span) => span,
         };
 
         Self::new(span.unwrap_or_else(Span::call_site), msg)
@@ -87,6 +92,12 @@ impl fmt::Display for ConvertError {
         match self {
             Self::UndeclaredName(name) => {
                 write!(f, "undeclared name: `{}`", name)
+            }
+            Self::EmptyCat(_) => {
+                write!(f, "concatenation has no elements")
+            }
+            Self::EmptyAlt(_) => {
+                write!(f, "alternation has no elements")
             }
         }
     }
@@ -105,7 +116,7 @@ impl Convert for Ident {
 
         let binding = context
             .lookup(&name)
-            .ok_or_else(|| ConvertError::UndeclaredName(name.clone()))?;
+            .ok_or_else(|| ConvertError::UndeclaredName(Box::new(name.clone())))?;
 
         Ok(match binding {
             Binding::Variable(index) => NamedExpression {
@@ -198,42 +209,37 @@ impl Convert for Term {
 
 impl Convert for Cat {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
+        fn convert_pair(
+            pair: Pair<Term, Token![.]>,
+            context: &mut Context,
+        ) -> Result<(NamedExpression, Option<Span>), ConvertError> {
+            match pair {
+                Pair::Punctuated(t, p) => t.convert(context).map(|expr| (expr, Some(p.span))),
+                Pair::End(t) => t.convert(context).map(|expr| (expr, None)),
+            }
+        }
+
+        let span = self.span();
         let mut iter = self.0.into_pairs();
 
-        let (first, punct) = match iter.next().unwrap() {
-            Pair::Punctuated(t, p) => (t.convert(context)?, Some(p.span)),
-            Pair::End(t) => (t.convert(context)?, None),
-        };
+        let (first, mut punct) = iter
+            .next()
+            .ok_or(ConvertError::EmptyCat(span))
+            .and_then(|pair| convert_pair(pair, context))?;
 
-        let mut rest = Vec::new();
-        let (span, _) = iter.try_fold(
-            (
-                first.span.and_then(|s| punct.and_then(|p| s.join(p))),
-                punct,
-            ),
-            |(span, punct), pair| {
-                let (snd, p) = match pair {
-                    Pair::Punctuated(t, p) => (t.convert(context)?, Some(p.span)),
-                    Pair::End(t) => (t.convert(context)?, None),
-                };
+        let mut rest = iter.map(|pair| {
+            convert_pair(pair, context).map(|(snd, p)| (mem::replace(&mut punct, p), snd))
+        });
 
-                let span = span
-                    .and_then(|s| snd.span.and_then(|t| s.join(t)))
-                    .and_then(|s| p.and_then(|p| s.join(p)));
-                rest.push((punct, snd));
-                Ok((span, p))
-            },
-        )?;
-
-        let mut iter = rest.into_iter();
-        if let Some((punct, second)) = iter.next() {
+        if let Some(res) = rest.next() {
+            let (punct, second) = res?;
             Ok(NamedExpression {
                 name: None,
                 expr: ast::Cat {
                     first: Box::new(first),
                     punct,
                     second: Box::new(second),
-                    rest: iter.collect(),
+                    rest: rest.collect::<Result<_, _>>()?,
                 }
                 .into(),
                 span,
@@ -260,42 +266,37 @@ impl Convert for Labelled {
 
 impl Convert for Alt {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
+fn convert_pair(
+            pair: Pair<Labelled, Token![|]>,
+            context: &mut Context,
+        ) -> Result<(NamedExpression, Option<Span>), ConvertError> {
+            match pair {
+                Pair::Punctuated(t, p) => t.convert(context).map(|expr| (expr, Some(p.span))),
+                Pair::End(t) => t.convert(context).map(|expr| (expr, None)),
+            }
+        }
+
+        let span = self.span();
         let mut iter = self.0.into_pairs();
 
-        let (first, punct) = match iter.next().unwrap() {
-            Pair::Punctuated(t, p) => (t.convert(context)?, Some(p.span)),
-            Pair::End(t) => (t.convert(context)?, None),
-        };
+        let (first, mut punct) = iter
+            .next()
+            .ok_or(ConvertError::EmptyAlt(span))
+            .and_then(|pair| convert_pair(pair, context))?;
 
-        let mut rest = Vec::new();
-        let (span, _) = iter.try_fold(
-            (
-                first.span.and_then(|s| punct.and_then(|p| s.join(p))),
-                punct,
-            ),
-            |(span, punct), pair| {
-                let (snd, p) = match pair {
-                    Pair::Punctuated(t, p) => (t.convert(context)?, Some(p.span)),
-                    Pair::End(t) => (t.convert(context)?, None),
-                };
+        let mut rest = iter.map(|pair| {
+            convert_pair(pair, context).map(|(snd, p)| (mem::replace(&mut punct, p), snd))
+        });
 
-                let span = span
-                    .and_then(|s| snd.span.and_then(|t| s.join(t)))
-                    .and_then(|s| p.and_then(|p| s.join(p)));
-                rest.push((punct, snd));
-                Ok((span, p))
-            },
-        )?;
-
-        let mut iter = rest.into_iter();
-        if let Some((punct, second)) = iter.next() {
+        if let Some(res) = rest.next() {
+            let (punct, second) = res?;
             Ok(NamedExpression {
                 name: None,
                 expr: ast::Alt {
                     first: Box::new(first),
                     punct,
                     second: Box::new(second),
-                    rest: iter.collect(),
+                    rest: rest.collect::<Result<_, _>>()?,
                 }
                 .into(),
                 span,

@@ -14,8 +14,8 @@ pub mod lower;
 
 mod infer;
 
-pub use self::infer::TypeInfer;
 use self::error::{AltError, CatError};
+pub use self::infer::TypeInfer;
 
 #[derive(Debug, Default, Clone, Eq, Hash, PartialEq)]
 pub struct Type {
@@ -130,7 +130,7 @@ impl Cat {
         rest: I,
     ) -> Result<Self, CatError> {
         if first.get_type().nullable() {
-            return Err(CatError::FirstNullable(first, punct));
+            return Err(CatError::FirstNullable { expr: first, punct });
         }
 
         iter::once((punct, second))
@@ -138,16 +138,20 @@ impl Cat {
             .try_fold(
                 (first.get_type().clone(), vec![first]),
                 |(ty, mut terms), (punct, right)| {
-                    if !ty
+                    if ty
                         .flast_set()
                         .intersect_first(right.get_type().first_set())
                         .is_empty()
                     {
-                        Err(CatError::FirstFlastOverlap(terms, punct, right))
-                    } else {
                         let ty = ty.cat(right.get_type().clone());
                         terms.push(right);
                         Ok((ty, terms))
+                    } else {
+                        Err(CatError::FirstFlastOverlap {
+                            first: terms,
+                            punct,
+                            next: right,
+                        })
                     }
                 },
             )
@@ -184,17 +188,25 @@ impl Alt {
                 (first.get_type().clone(), vec![first]),
                 |(ty, mut terms), (punct, right)| {
                     if ty.nullable() && right.get_type().nullable() {
-                        Err(AltError::BothNullable(terms, punct, right))
-                    } else if !ty
+                        Err(AltError::BothNullable {
+                            left: terms,
+                            punct,
+                            right,
+                        })
+                    } else if ty
                         .first_set()
                         .intersect(right.get_type().first_set())
                         .is_empty()
                     {
-                        Err(AltError::FirstOverlap(terms, punct, right))
-                    } else {
                         let ty = ty.alt(right.get_type().clone());
                         terms.push(right);
                         Ok((ty, terms))
+                    } else {
+                        Err(AltError::FirstOverlap {
+                            left: terms,
+                            punct,
+                            right,
+                        })
                     }
                 },
             )

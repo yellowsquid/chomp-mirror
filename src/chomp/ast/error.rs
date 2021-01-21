@@ -27,8 +27,8 @@ impl From<SubstituteError> for syn::Error {
     fn from(e: SubstituteError) -> Self {
         let msg = e.to_string();
         let span = match e {
-            SubstituteError::FreeParameter { span, .. } => span,
-            SubstituteError::WrongArgCount { span, .. } => span,
+            SubstituteError::FreeParameter { span, .. }
+            | SubstituteError::WrongArgCount { span, .. } => span,
         };
 
         Self::new(span.unwrap_or_else(Span::call_site), msg)
@@ -38,18 +38,14 @@ impl From<SubstituteError> for syn::Error {
 impl Display for SubstituteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::FreeParameter { param, span, name } => {
+            Self::FreeParameter { param, name, .. } => {
                 if let Some(name) = name {
                     write!(f, "unbound parameter: `{}`", name)
                 } else {
                     write!(f, "unbound parameter: '{}", param.index)
                 }
             }
-            Self::WrongArgCount {
-                call,
-                expected,
-                span,
-            } => {
+            Self::WrongArgCount { call, expected, .. } => {
                 if call.args.len() == 1 {
                     write!(
                         f,

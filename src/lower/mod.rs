@@ -8,15 +8,10 @@ use proc_macro2::{Ident, Span, TokenStream, TokenTree};
 use quote::{format_ident, quote, quote_spanned};
 use syn::{Index, LitStr};
 
-use crate::chomp::{
-    ast,
-    set::FirstSet,
-    typed::{
+use crate::chomp::{Name, ast, set::FirstSet, typed::{
         lower::{Backend, GenerateCode},
         Alt, Cat, Epsilon, Fix, Literal, Type, Typed, TypedExpression, Variable,
-    },
-    Name,
-};
+    }};
 
 #[derive(Clone, Debug)]
 struct Ty {
@@ -110,7 +105,7 @@ impl RustBackend {
                 None => format_ident!("{}{}", default, index + 1, span = span),
                 Some(name) => {
                     let name = name.to_snake_case().into_ident(span);
-                    let count = name_map.entry(name.clone()).or_insert(0usize);
+                    let count = name_map.entry(name.clone()).or_insert(0_usize);
                     *count += 1;
                     format_ident!("{}{}", name, count)
                 }
@@ -128,7 +123,7 @@ impl RustBackend {
                 None => format_ident!("{}{}", default, index + 1, span = span),
                 Some(name) => {
                     let name = name.to_camel_case().into_ident(span);
-                    let count = name_map.entry(name.clone()).or_insert(0usize);
+                    let count = name_map.entry(name.clone()).or_insert(0_usize);
                     *count += 1;
                     format_ident!("{}{}", name, count)
                 }
@@ -202,15 +197,14 @@ impl Backend for RustBackend {
             }
         };
 
-        if lit.value().len() == 1 {
+        if let Some(c) = lit.value().chars().next() {
             self.can_char.insert(id);
-            let c = lit.value().chars().next().unwrap();
             rest.extend(quote_spanned! {span=>
-                impl From<#name> for char {
-                    fn from(_: #name) -> Self {
-                        #c
-                    }
-                }
+                                        impl From<#name> for char {
+                                            fn from(_: #name) -> Self {
+                                                #c
+                                            }
+                                        }
             });
         }
 
@@ -308,7 +302,7 @@ impl Backend for RustBackend {
             .map(|(idx, _)| name_parts[idx].clone());
         let (first_alts, firsts): (Vec<_>, Vec<_>) = tys
             .iter()
-            .map(|ty| ty.first_set())
+            .map(Type::first_set)
             .cloned()
             .enumerate()
             .filter(|(_, fs)| !fs.is_empty())
@@ -319,7 +313,7 @@ impl Backend for RustBackend {
             .unzip();
         let all_firsts = tys
             .iter()
-            .map(|ty| ty.first_set())
+            .map(Type::first_set)
             .cloned()
             .flat_map(FirstSet::into_iter);
 

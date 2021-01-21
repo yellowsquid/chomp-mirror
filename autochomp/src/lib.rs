@@ -232,7 +232,7 @@ impl Convert for CallOrVariable1 {
             Opt26::None1(_) => {
                 let binding = context
                     .lookup(&name)
-                    .ok_or_else(|| ConvertError::UndeclaredName(name.clone()))?;
+                    .ok_or_else(|| ConvertError::UndeclaredName(Box::new(name.clone())))?;
 
                 Ok(match binding {
                     Binding::Variable(index) => NamedExpression {

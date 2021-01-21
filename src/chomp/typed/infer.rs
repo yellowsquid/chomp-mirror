@@ -61,25 +61,18 @@ impl Folder for TypeInfer<'_> {
 
     fn fold_alt(&mut self, name: Option<Name>, span: Option<Span>, alt: Alt) -> Self::Out {
         let first = alt.first.fold(self)?;
-        let second = alt.second;
-        let rest = alt.rest;
+        let second = alt.second.fold(self)?;
+        let rest = alt
+            .rest
+            .into_iter()
+            .map(|(punct, term)| -> Result<_, TypeError> { Ok((punct, term.fold(self)?)) })
+            .collect::<Result<Vec<_>, _>>()?;
         let punct = alt.punct;
-        self.context
-            .with_unguard(|context| -> Result<TypedExpression, TypeError> {
-                let mut infer = TypeInfer { context };
-                let second = second.fold(&mut infer)?;
-                let rest = rest
-                    .into_iter()
-                    .map(|(punct, term)| -> Result<_, TypeError> {
-                        Ok((punct, term.fold(&mut infer)?))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(TypedExpression {
-                    inner: super::Alt::new(first, punct, second, rest)?.into(),
-                    name,
-                    span,
-                })
-            })
+        Ok(TypedExpression {
+            inner: super::Alt::new(first, punct, second, rest)?.into(),
+            name,
+            span,
+        })
     }
 
     fn fold_fix(&mut self, name: Option<Name>, span: Option<Span>, fix: Fix) -> Self::Out {
@@ -111,7 +104,7 @@ impl Folder for TypeInfer<'_> {
         span: Option<Span>,
         var: Variable,
     ) -> Self::Out {
-        let ty = match self.context.get_variable_type(&var) {
+        let ty = match self.context.get_variable_type(var) {
             Ok(ty) => ty.clone(),
             Err(inner) => {
                 return Err(VariableError {
@@ -136,10 +129,10 @@ impl Folder for TypeInfer<'_> {
         _span: Option<Span>,
         _param: Parameter,
     ) -> Self::Out {
-        todo!()
+        unimplemented!()
     }
 
-    fn fold_call(&mut self, _name: Option<Name>,_span: Option<Span>, _call: Call) -> Self::Out {
-        todo!()
+    fn fold_call(&mut self, _name: Option<Name>, _span: Option<Span>, _call: Call) -> Self::Out {
+        unimplemented!()
     }
 }
