@@ -12,7 +12,7 @@ jobs:
       run: |
         git clone --mirror 'https://git.yellowsquid.uk/yellowsquid/chomp.git'
         cd chomp.git/
-        git remote add github "https://$GITHUB_ACTOR@github.com/$GITHUB_REPOSITORY.git"
+        git remote add github "https://$GITHUB_ACTOR:$GITHUB_TOKEN@github.com/$GITHUB_REPOSITORY.git"
         git push --mirror github
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
