@@ -1,6 +1,25 @@
+use chewed::{Parse, TakeError};
 use chomp_macro::nibble;
-use std::{collections::HashMap, convert::TryInto, mem, ops::RangeInclusive};
+use std::{collections::HashMap, convert::TryInto, fmt, mem, ops::RangeInclusive};
 
+fn decode_pair(one: u16, other: u16) -> u32 {
+    // Ranges are confusingly backwards
+    const LOW_SURROGATE_RANGE: RangeInclusive<u16> = 0xDC00..=0xDFFF;
+    const HIGH_SURROGATE_RANGE: RangeInclusive<u16> = 0xD800..=0xDBFF;
+
+    let (low, high) = if LOW_SURROGATE_RANGE.contains(&one) {
+        assert!(HIGH_SURROGATE_RANGE.contains(&other));
+        (one, other)
+    } else {
+        assert!(LOW_SURROGATE_RANGE.contains(&other));
+        assert!(HIGH_SURROGATE_RANGE.contains(&one));
+        (other, one)
+    };
+
+    u32::from(high - 0xD800) * 0x400 + u32::from(low - 0xDC00) + 0x10000
+}
+
+#[derive(Debug)]
 enum Value {
     True,
     False,
@@ -9,6 +28,219 @@ enum Value {
     String(String),
     Array(Vec<Value>),
     Object(HashMap<String, Value>),
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn write_str(s: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "\"")?;
+            for c in s.chars() {
+                match c {
+                    '\x20'..='\x21' | '\x23'..='\x5B' | '\x5D'..='\u{10FFFF}' => write!(f, "{}", c),
+                    '\x22' => write!(f, r#"\""#),
+                    '\x5C' => write!(f, r#"\\"#),
+                    // '\x2F' => write!(f, r#"\/"#),
+                    '\x08' => write!(f, r#"\b"#),
+                    '\x0C' => write!(f, r#"\f"#),
+                    '\x0A' => write!(f, r#"\n"#),
+                    '\x0D' => write!(f, r#"\r"#),
+                    '\x09' => write!(f, r#"\t"#),
+                    _ => {
+                        let codepoint = u32::from(c) - 0x10000;
+                        let high: u16 = (codepoint / 0x400 + 0xD800).try_into().unwrap();
+                        let low: u16 = (codepoint % 0x400 + 0xDC00).try_into().unwrap();
+                        write!(f, r#"\u{:04X}\u{:04X}"#, high, low)
+                    }
+                }?;
+            }
+            write!(f, "\"")
+        }
+
+        match self {
+            Self::True => write!(f, "true"),
+            Self::False => write!(f, "false"),
+            Self::Null => write!(f, "null"),
+            Self::Number(n) => write!(f, "{}", n),
+            Self::String(s) => write_str(s, f),
+            Self::Array(a) => {
+                write!(f, "[")?;
+                let mut iter = a.iter();
+                if let Some(last) = iter.next_back() {
+                    for val in iter {
+                        write!(f, "{}, ", val)?;
+                    }
+
+                    write!(f, "{}", last)?;
+                }
+                write!(f, "]")
+            }
+            Self::Object(o) => {
+                '{'.fmt(f)?;
+                let mut iter = o.iter();
+                if let Some((last_key, last_val)) = iter.next() {
+                    for (key, val) in iter {
+                        write_str(key, f)?;
+                        write!(f, " : {}, ", val)?;
+                    }
+
+                    write_str(last_key, f)?;
+                    write!(f, " : {}", last_val)?;
+                }
+                '}'.fmt(f)
+            }
+        }
+    }
+}
+
+impl Parse for Value {
+    fn take<P: chewed::Parser + ?Sized>(input: &mut P) -> Result<Self, TakeError> {
+        const WS: &[char] = &[' ', '\t', '\n', '\r'];
+        const FIRST: &[char] = &[
+            't', 'f', 'n', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-', '"', '[', '{',
+        ];
+
+        fn skip_ws<P: chewed::Parser + ?Sized>(input: &mut P) {
+            input.skip_while(|c| WS.contains(&c))
+        }
+
+        fn parse_u16<P: chewed::Parser + ?Sized>(input: &mut P) -> Result<u16, TakeError> {
+            const HEX: &[char] = &[
+                '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+                'A', 'B', 'C', 'D', 'E', 'F',
+            ];
+            let mut chars = ['\0'; 4];
+            input.take_chars_from(HEX, &mut chars)?;
+            let mut out = 0;
+            for c in &chars {
+                match c {
+                    '0' => out *= 16,
+                    '1' => out *= 16 + 1,
+                    '2' => out *= 16 + 2,
+                    '3' => out *= 16 + 3,
+                    '4' => out *= 16 + 4,
+                    '5' => out *= 16 + 5,
+                    '6' => out *= 16 + 6,
+                    '7' => out *= 16 + 7,
+                    '8' => out *= 16 + 8,
+                    '9' => out *= 16 + 9,
+                    'a' | 'A' => out *= 16 + 10,
+                    'b' | 'B' => out *= 16 + 11,
+                    'c' | 'C' => out *= 16 + 12,
+                    'd' | 'D' => out *= 16 + 13,
+                    'e' | 'E' => out *= 16 + 14,
+                    'f' | 'F' => out *= 16 + 15,
+                    _ => unreachable!(),
+                };
+            }
+            Ok(out)
+        }
+
+        fn parse_str<P: chewed::Parser + ?Sized>(input: &mut P) -> Result<String, TakeError> {
+            input.consume_str("\"")?;
+            let mut s = String::new();
+            loop {
+                match input
+                    .next()
+                    .ok_or_else(|| TakeError::EndOfStream(input.pos()))?
+                {
+                    '"' => return Ok(s),
+                    c @ '\x20'..='\x21' | c @ '\x23'..='\x5B' | c @ '\x5D'..='\u{10FFFF}' => {
+                        s.push(c)
+                    }
+                    '\\' => {
+                        match input
+                            .next()
+                            .ok_or_else(|| TakeError::EndOfStream(input.pos()))?
+                        {
+                            '\"' => s.push('\x22'),
+                            '\\' => s.push('\x5C'),
+                            '/' => s.push('\x2F'),
+                            'b' => s.push('\x08'),
+                            'f' => s.push('\x0C'),
+                            'n' => s.push('\x0A'),
+                            'r' => s.push('\x0D'),
+                            't' => s.push('\x09'),
+                            'u' => {
+                                let v = parse_u16(input)?;
+                                let codepoint = if (0xD800..=0xDFFF).contains(&v) {
+                                    input.consume_str(r#"\u"#)?;
+                                    let other = parse_u16(input)?;
+                                    decode_pair(v, other)
+                                } else {
+                                    u32::from(v)
+                                };
+                                s.push(codepoint.try_into().unwrap())
+                            }
+                            c => return Err(TakeError::BadBranch(input.pos(), c, todo!())),
+                        }
+                    }
+                    c => return Err(TakeError::BadBranch(input.pos(), c, todo!())),
+                }
+            }
+        }
+
+        skip_ws(input);
+
+        let res = match input
+            .peek()
+            .ok_or_else(|| TakeError::EndOfStream(input.pos()))?
+        {
+            't' => input.consume_str("true").map(|_| Value::True),
+            'f' => input.consume_str("false").map(|_| Value::False),
+            'n' => input.consume_str("null").map(|_| Value::Null),
+            '0'..='9' | '-' => {
+                todo!()
+            }
+            '"' => parse_str(input).map(Value::String),
+            '[' => {
+                const ARRAY_TAIL: &[char] = &[',', ']'];
+                input.consume_str("[")?;
+                let a = input
+                    .iter_strict(Self::take, ',', ']', ARRAY_TAIL, FIRST)
+                    .collect::<Result<_, _>>()
+                    .map(Value::Array)?;
+                input.consume_str("]")?;
+                Ok(a)
+            }
+            '{' => {
+                const OBJECT_TAIL: &[char] = &[',', '}'];
+                input.consume_str("{")?;
+                let o = input
+                    .iter_strict(
+                        |p| {
+                            skip_ws(p);
+                            let key = parse_str(p)?;
+                            skip_ws(p);
+                            p.consume_str(":")?;
+                            p.take().map(|val| (key, val))
+                        },
+                        ',',
+                        '}',
+                        OBJECT_TAIL,
+                        &['"'],
+                    )
+                    .collect::<Result<_, _>>()
+                    .map(Value::Object)?;
+                input.consume_str("}")?;
+                Ok(o)
+            }
+            c => Err(TakeError::BadBranch(input.pos(), c, FIRST)),
+        }?;
+
+        skip_ws(input);
+        Ok(res)
+    }
+
+    // fn from_str(s: &str) -> Result<Self, Self::Err> {
+    //     const WS: &[char] = &[' ', '\t', '\n', '\r'];
+
+    //     let mut chars = s.chars();
+
+    //     let val = match chars.find(|c| !WS.contains(c)) {
+    //         None => Err(()),
+    //         Some('t') => ,
+    //     };
+    // }
 }
 
 // Note: this is only an ASCII subset. Need to add character sets.
@@ -124,23 +356,6 @@ impl Iterator for Star2 {
         fn decode(u: Unicode1) -> u16 {
             let chars: [char; 4] = [u.hex1.into(), u.hex2.into(), u.hex3.into(), u.hex4.into()];
             u16::from_str_radix(&chars.iter().collect::<String>(), 16).unwrap()
-        }
-
-        fn decode_pair(one: u16, other: u16) -> u32 {
-            // Ranges are confusingly backwards
-            const LOW_SURROGATE_RANGE: RangeInclusive<u16> = 0xDC00..=0xDFFF;
-            const HIGH_SURROGATE_RANGE: RangeInclusive<u16> = 0xD800..=0xDBFF;
-
-            let (low, high) = if LOW_SURROGATE_RANGE.contains(&one) {
-                assert!(HIGH_SURROGATE_RANGE.contains(&other));
-                (one, other)
-            } else {
-                assert!(LOW_SURROGATE_RANGE.contains(&other));
-                assert!(HIGH_SURROGATE_RANGE.contains(&one));
-                (other, one)
-            };
-
-            u32::from(high - 0xD800) * 0x400 + u32::from(low - 0xDC00) + 0x10000
         }
 
         const SURROGATE_PAIR_RANGE: RangeInclusive<u16> = 0xD800..=0xDFFF;
