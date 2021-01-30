@@ -1,6 +1,7 @@
+use std::{collections::HashMap, convert::TryInto, fmt, mem, ops::RangeInclusive};
+
 use chewed::{Parse, TakeError};
 use chomp_macro::nibble;
-use std::{collections::HashMap, convert::TryInto, fmt, mem, ops::RangeInclusive};
 
 fn decode_pair(one: u16, other: u16) -> u32 {
     // Ranges are confusingly backwards
@@ -21,9 +22,8 @@ fn decode_pair(one: u16, other: u16) -> u32 {
 
 #[derive(Debug)]
 enum Value {
-    True,
-    False,
     Null,
+    Bool(bool),
     Number(f64),
     String(String),
     Array(Vec<Value>),
@@ -57,9 +57,8 @@ impl fmt::Display for Value {
         }
 
         match self {
-            Self::True => write!(f, "true"),
-            Self::False => write!(f, "false"),
             Self::Null => write!(f, "null"),
+            Self::Bool(b) => write!(f, "{}", b),
             Self::Number(n) => write!(f, "{}", n),
             Self::String(s) => write_str(s, f),
             Self::Array(a) => {
@@ -185,9 +184,9 @@ impl Parse for Value {
             .peek()
             .ok_or_else(|| TakeError::EndOfStream(input.pos()))?
         {
-            't' => input.consume_str("true").map(|_| Value::True),
-            'f' => input.consume_str("false").map(|_| Value::False),
             'n' => input.consume_str("null").map(|_| Value::Null),
+            't' => input.consume_str("true").map(|_| Value::Bool(true)),
+            'f' => input.consume_str("false").map(|_| Value::Bool(false)),
             '0'..='9' | '-' => {
                 todo!()
             }
@@ -316,8 +315,8 @@ impl From<Ast> for Value {
 impl From<Value1> for Value {
     fn from(value: Value1) -> Self {
         match value.0 {
-            Alt182::True1(_) => Self::True,
-            Alt182::False1(_) => Self::False,
+            Alt182::True1(_) => Self::Bool(true),
+            Alt182::False1(_) => Self::Bool(false),
             Alt182::Null1(_) => Self::Null,
             Alt182::Number1(n) => Self::Number(n.into()),
             Alt182::String1(s) => Self::String(s.into()),
