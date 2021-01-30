@@ -44,6 +44,81 @@ pub trait Parser {
 
         Ok(())
     }
+
+    fn skip_while<F: FnMut(char) -> bool>(&mut self, mut f: F) {
+        while self.peek().map_or(false, &mut f) {
+            self.next();
+        }
+    }
+
+    fn take_chars_from(&mut self, set: &'static [char], buffer: &mut [char]) -> Result<(), TakeError> {
+        for pos in buffer {
+            match self.next() {
+                None => return Err(TakeError::EndOfStream(self.pos())),
+                Some(c) if set.contains(&c) => *pos = c,
+                Some(c) => return Err(TakeError::BadBranch(self.pos(), c, set))
+            }
+        }
+
+        Ok(())
+    }
+
+    fn iter_strict<F: FnMut(&mut Self) -> Result<R, TakeError>, R>(
+        &mut self,
+        item_parse: F,
+        sep: char,
+        stop: char,
+        sep_stop_set: &'static [char],
+        first: &'static [char],
+    ) -> Iter<Self, F> {
+        Iter {
+            iter: self,
+            parse: item_parse,
+            strict_sep: true,
+            sep,
+            stop,
+            sep_stop_set,
+            first,
+        }
+    }
+}
+
+pub struct Iter<'a, P: ?Sized, F> {
+    iter: &'a mut P,
+    parse: F,
+    strict_sep: bool,
+    sep: char,
+    stop: char,
+    sep_stop_set: &'static [char],
+    first: &'static [char],
+}
+
+impl<P: Parser + ?Sized, F: FnMut(&mut P) -> Result<R, TakeError>, R> Iterator for Iter<'_, P, F> {
+    type Item = Result<R, TakeError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let c = self.iter.peek()?;
+        if c == self.stop {
+            None
+        } else {
+            let res = (self.parse)(self.iter).map(Some).transpose()?;
+
+            match self.iter.peek() {
+                None => Some(Err(TakeError::EndOfStream(self.iter.pos()))),
+                Some(c) if c == self.sep => {
+                    self.next();
+                    match self.iter.peek() {
+                        None => Some(Err(TakeError::EndOfStream(self.iter.pos()))),
+                        Some(c) if self.first.contains(&c) => Some(res),
+                        Some(c) if !self.strict_sep && c == self.stop => Some(res),
+                        Some(c) => Some(Err(TakeError::BadBranch(self.iter.pos(), c, self.first))),
+                    }
+                }
+                Some(c) if c == self.stop => Some(res),
+                Some(c) => Some(Err(TakeError::BadBranch(self.iter.pos(), c, self.sep_stop_set)))
+            }
+        }
+    }
 }
 
 pub struct IterWrapper<T: ?Sized> {
