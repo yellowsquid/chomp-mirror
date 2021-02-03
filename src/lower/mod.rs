@@ -197,7 +197,7 @@ impl Backend for RustBackend {
             }
         };
 
-        if let Some(c) = lit.value().chars().next() {
+        if let [c] = lit.value().chars().collect::<Vec<_>>()[..] {
             self.can_char.insert(id);
             rest.extend(quote_spanned! {span=>
                                         impl From<#name> for char {
