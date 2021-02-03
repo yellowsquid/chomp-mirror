@@ -106,7 +106,7 @@ impl<P: Parser + ?Sized, F: FnMut(&mut P) -> Result<R, TakeError>, R> Iterator f
             match self.iter.peek() {
                 None => Some(Err(TakeError::EndOfStream(self.iter.pos()))),
                 Some(c) if c == self.sep => {
-                    self.next();
+                    assert_eq!(self.iter.next(), Some(c));
                     match self.iter.peek() {
                         None => Some(Err(TakeError::EndOfStream(self.iter.pos()))),
                         Some(c) if self.first.contains(&c) => Some(res),

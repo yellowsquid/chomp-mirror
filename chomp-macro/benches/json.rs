@@ -2,6 +2,10 @@ use std::{collections::HashMap, convert::TryInto, fmt, mem, ops::RangeInclusive}
 
 use chewed::{Parse, TakeError};
 use chomp_macro::nibble;
+use criterion::{
+    criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
+    Throughput,
+};
 
 fn decode_pair(one: u16, other: u16) -> u32 {
     // Ranges are confusingly backwards
@@ -97,6 +101,10 @@ impl Parse for Value {
         const FIRST: &[char] = &[
             't', 'f', 'n', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-', '"', '[', '{',
         ];
+        const FIRST_WS: &[char] = &[
+            't', 'f', 'n', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-', '"', '[', '{',
+            ' ', '\t', '\n', '\r',
+        ];
 
         fn skip_ws<P: chewed::Parser + ?Sized>(input: &mut P) {
             input.skip_while(|c| WS.contains(&c))
@@ -188,14 +196,21 @@ impl Parse for Value {
             't' => input.consume_str("true").map(|_| Value::Bool(true)),
             'f' => input.consume_str("false").map(|_| Value::Bool(false)),
             '0'..='9' | '-' => {
-                todo!()
+                let mut s = String::new();
+                s.push(input.next().unwrap());
+                while input.peek().map_or(false, |c| {
+                    matches!(c, '0'..='9' | '+' | '-' | '.' | 'e' | 'E')
+                }) {
+                    s.push(input.next().unwrap());
+                }
+                s.parse().map(Value::Number).map_err(|_| todo!())
             }
             '"' => parse_str(input).map(Value::String),
             '[' => {
                 const ARRAY_TAIL: &[char] = &[',', ']'];
                 input.consume_str("[")?;
                 let a = input
-                    .iter_strict(Self::take, ',', ']', ARRAY_TAIL, FIRST)
+                    .iter_strict(Self::take, ',', ']', ARRAY_TAIL, FIRST_WS)
                     .collect::<Result<_, _>>()
                     .map(Value::Array)?;
                 input.consume_str("]")?;
@@ -216,7 +231,7 @@ impl Parse for Value {
                         ',',
                         '}',
                         OBJECT_TAIL,
-                        &['"'],
+                        &['"', ' ', '\t', '\n', '\r'],
                     )
                     .collect::<Result<_, _>>()
                     .map(Value::Object)?;
@@ -315,9 +330,9 @@ impl From<Ast> for Value {
 impl From<Value1> for Value {
     fn from(value: Value1) -> Self {
         match value.0 {
+            Alt182::Null1(_) => Self::Null,
             Alt182::True1(_) => Self::Bool(true),
             Alt182::False1(_) => Self::Bool(false),
-            Alt182::Null1(_) => Self::Null,
             Alt182::Number1(n) => Self::Number(n.into()),
             Alt182::String1(s) => Self::String(s.into()),
             Alt182::Object1(o) => Self::Object(o.into()),
@@ -469,3 +484,40 @@ impl Iterator for Sep2Iter {
         Some(res)
     }
 }
+
+const INPUTS: &[&str] = &[
+    r#"true"#,
+    r#"[true, false]"#,
+    r#"{"first" : null, "second" : 123}"#,
+    r#"{"first": [ true, "Hello there" ], "second": [123, -12.4e-7]}"#,
+    r#"{"first": [ true, "Hello there" ], "second": [123, -12.4e-7], "third": {"left": "Random text", "right": ["\ud83c\udf24\ufe0f"]}}"#,
+];
+
+fn parse_chewed(input: &str) -> Value {
+    IterWrapper::new(input.chars())
+        .parse::<Ast>()
+        .unwrap()
+        .into()
+}
+
+fn parse_handwritten(input: &str) -> Value {
+    IterWrapper::new(input.chars()).parse().unwrap()
+}
+
+fn bench_parse(c: &mut Criterion) {
+    let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
+    let mut group = c.benchmark_group("JSON");
+    group.plot_config(plot_config);
+    for (i, input) in INPUTS.iter().enumerate() {
+        group.throughput(Throughput::Bytes(input.len() as u64));
+        group.bench_with_input(BenchmarkId::new("Chewed", i), *input, |b, i| {
+            b.iter(|| parse_chewed(i))
+        });
+        group.bench_with_input(BenchmarkId::new("Handwritten", i), *input, |b, i| {
+            b.iter(|| parse_handwritten(i))
+        });
+    }
+}
+
+criterion_group!(benches, bench_parse);
+criterion_main!(benches);

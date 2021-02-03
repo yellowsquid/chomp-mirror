@@ -49,12 +49,12 @@ chomp_macro::nibble! {
          "x" | "y" | "z" | "{" | "|" | "}" | "~") : Literal |
         "\\" . (
             ("\"" | "'" | "n" | "r" | "t" | "\\" | "0") : Ascii |
-             "x" . oct_digit . hex_digit : Oct |
-             "u{" .hex_digit
-                  .opt(hex_digit
-                      .opt(hex_digit
-                          .opt(hex_digit
-                              .opt(hex_digit . opt(hex_digit))))) . "}" : Unicode
+            "x" . oct_digit . hex_digit : Oct |
+            "u{" .hex_digit
+                 .opt(hex_digit
+                     .opt(hex_digit
+                         .opt(hex_digit
+                             .opt(hex_digit . opt(hex_digit))))) . "}" : Unicode
         ) : Escape ;
 
     let ws = plus(Pattern_Whitespace);
