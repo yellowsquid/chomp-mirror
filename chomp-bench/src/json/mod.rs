@@ -1,8 +1,10 @@
 use std::{collections::HashMap, convert::TryInto, fmt, ops::RangeInclusive};
 
 use chewed::{Parse, TakeError};
+use lalrpop_util::lalrpop_mod;
 
 pub mod nibble;
+lalrpop_mod!(pub lalr, "/json/lalr.rs");
 
 fn decode_pair(one: u16, other: u16) -> u32 {
     // Ranges are confusingly backwards
