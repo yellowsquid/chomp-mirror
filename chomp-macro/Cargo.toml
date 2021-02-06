@@ -11,13 +11,5 @@ chomp = {path = ".."}
 version = "1.0.58"
 features = ["parsing", "proc-macro"]
 
-[dev-dependencies]
-chewed = {path = "../chewed"}
-criterion = "0.3.3"
-
 [lib]
 proc_macro = true
-
-[[bench]]
-name = "json"
-harness = false
