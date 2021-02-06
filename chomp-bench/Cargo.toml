@@ -7,9 +7,14 @@ edition = "2018"
 [dependencies]
 chewed = {path = "../chewed"}
 chomp-macro = {path = "../chomp-macro"}
+lalrpop-util = "0.19.4"
+regex = "1.4.3"
 
 [dev-dependencies]
-criterion = "0.3.3"
+criterion = "0.3.4"
+
+[build-dependencies]
+lalrpop = "0.19.4"
 
 [[bench]]
 name = "json"
