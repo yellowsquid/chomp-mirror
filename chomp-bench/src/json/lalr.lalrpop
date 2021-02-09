@@ -4,21 +4,33 @@ use std::{collections::HashMap, convert::TryInto, str::FromStr};
 
 grammar;
 
-pub RawValue: Value = {
+pub Value: Value = {
     "null" => Value::Null,
     "true" => Value::Bool(true),
     "false" => Value::Bool(false),
     Num => Value::Number(<>),
     Str => Value::String(<>),
-    "[" <Comma<RawValue>> "]" => Value::Array(<>),
-    "{" <Comma<(<Str> ":" <RawValue>)>> "}" => Value::Object(<>.into_iter().collect()),
+    "[" "]" => Value::Array(Vec::new()),
+    "[" <v : (<Value> ",")*> <e: Value> "]" => {
+        let mut v = v;
+        v.push(e);
+        Value::Array(v)
+    },
+    "{" "}" => Value::Object(HashMap::new()),
+    "{" <v : (<Str> ":" <Value> ",")*> <e : (<Str> ":" <Value>)> "}" => {
+        let mut v = v;
+        v.push(e);
+        Value::Object(v.into_iter().collect())
+    },
 };
 
-pub Num: f64 = r"-?(0|[1-9][0-9]*)(\.[0-9]*)([eE][-+]?[0-9]+)" => f64::from_str(<>).unwrap();
+pub Num: f64 = r"-?(0|[1-9][0-9]*)(\.[0-9]*)?([eE][-+]?[0-9]+)?" => f64::from_str(<>).unwrap();
 
 pub Str: String = r#""([^\\"]|\\.)*""# => {
     let mut out = String::new();
     let mut iter = <>.chars();
+    iter.next();
+    iter.next_back();
     while let Some(c) = iter.next() {
         let c = match c {
             c @ '\x20'..='\x21' | c @ '\x23'..='\x5B' | c @ '\x5D'..='\u{10FFFF}' => c,
@@ -47,20 +59,11 @@ pub Str: String = r#""([^\\"]|\\.)*""# => {
                     };
                     codepoint.try_into().unwrap()
                 }
-                _ => panic!(),
+                c => panic!("bad escape sequence {}", c),
             }
-            _ => panic!(),
+            c => panic!("invalid character {}", c),
         };
         out.push(c);
     }
     out
 };
-
-Comma<T>: Vec<T> = {
-    T? => <>.into_iter().collect(),
-    <v : (<T> ",")+> <e : T> => {
-        let mut v = v;
-        v.push(e);
-        v
-    }
-}
