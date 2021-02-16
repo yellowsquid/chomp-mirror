@@ -4,6 +4,9 @@ version = "0.1.0"
 authors = ["Greg Brown <gmb60@cam.ac.uk>"]
 edition = "2018"
 
+[dev-dependencies]
+chewed = {path = "../chewed"}
+
 [dependencies]
 chomp = {path = ".."}
 
