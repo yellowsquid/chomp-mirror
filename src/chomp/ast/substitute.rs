@@ -424,8 +424,8 @@ impl Folder for InlineCalls {
                 .expr
                 .clone()
                 .fold(&mut SubstituteParams { params: call.args })?;
-            expr.name = Some(expr.name.or(name).unwrap_or(call.name));
-            expr.span = expr.span.or(span);
+            expr.name = Some(name.or(expr.name).unwrap_or(call.name));
+            expr.span = span.or(expr.span);
 
             Ok(expr)
         } else {

@@ -105,9 +105,9 @@ impl Iterator for Star2 {
 
     fn next(&mut self) -> Option<Self::Item> {
         fn next(star: &mut Star2) -> Option<Char1> {
-            match std::mem::replace(star, Star2(Opt9::None1(Epsilon))).0 {
-                Opt9::None1(_) => None,
-                Opt9::Some1(s) => {
+            match std::mem::replace(star, Star2(Opt5::None1(Epsilon))).0 {
+                Opt5::None1(_) => None,
+                Opt5::Some1(s) => {
                     *star = *s.rec1;
                     Some(s.char1)
                 }
@@ -162,10 +162,10 @@ impl Iterator for Star2 {
 impl From<Object1> for HashMap<String, Value> {
     fn from(object: Object1) -> Self {
         match object.opt1 {
-            Opt12::None1(_) => HashMap::new(),
-            Opt12::Sep1(s) => s
+            Opt8::None1(_) => HashMap::new(),
+            Opt8::Sep1(s) => s
                 .into_iter()
-                .map(|m| (m.string1.into(), (*m.value1).into()))
+                .map(|m| (m.key1.into(), (*m.value1).into()))
                 .collect(),
         }
     }
@@ -190,8 +190,8 @@ impl Iterator for Sep1Iter {
         let inner = self.0.take()?.0;
         let res = inner.member1;
         self.0 = match inner.opt1 {
-            Opt11::None1(_) => None,
-            Opt11::Some1(s) => Some(*s.rec1),
+            Opt7::None1(_) => None,
+            Opt7::Some1(s) => Some(*s.rec1),
         };
         Some(res)
     }
@@ -200,8 +200,8 @@ impl Iterator for Sep1Iter {
 impl From<Array1> for Vec<Value> {
     fn from(array: Array1) -> Self {
         match array.opt1 {
-            Opt14::None1(_) => Vec::new(),
-            Opt14::Sep1(s) => s.into_iter().map(|x| (*x.value1).into()).collect(),
+            Opt10::None1(_) => Vec::new(),
+            Opt10::Sep1(s) => s.into_iter().map(|x| (*x.value1).into()).collect(),
         }
     }
 }
@@ -225,8 +225,8 @@ impl Iterator for Sep2Iter {
         let inner = self.0.take()?.0;
         let res = inner.x1;
         self.0 = match inner.opt1 {
-            Opt13::None1(_) => None,
-            Opt13::Some1(s) => Some(*s.rec1),
+            Opt9::None1(_) => None,
+            Opt9::Some1(s) => Some(*s.rec1),
         };
         Some(res)
     }

@@ -266,7 +266,7 @@ impl Convert for Labelled {
 
 impl Convert for Alt {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
-fn convert_pair(
+        fn convert_pair(
             pair: Pair<Labelled, Token![|]>,
             context: &mut Context,
         ) -> Result<(NamedExpression, Option<Span>), ConvertError> {

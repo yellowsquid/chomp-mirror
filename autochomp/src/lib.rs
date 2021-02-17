@@ -25,6 +25,9 @@ chomp_macro::nibble! {
     let XID_Start =
         "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" |
         "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" |
+
+
+
         "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" |
         "y" | "z" |
         "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" |
@@ -95,8 +98,8 @@ impl Ast {
         let mut iter = content.into_iter();
 
         for stmt in &mut iter {
-            let name: Name = stmt.ident1.into();
-            let params = Option::from(stmt.opt2)
+            let name: Name = stmt.name1.into();
+            let params = Option::from(stmt.args1)
                 .into_iter()
                 .flat_map(List2::into_iter)
                 .map(Name::from);
@@ -148,8 +151,8 @@ impl Convert for Expr1 {
 
 impl Convert for First1 {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
-        let named = self.punctuated1.convert(context)?;
-        let name = Option::from(self.opt1).or(named.name);
+        let named = self.cat1.convert(context)?;
+        let name = Option::from(self.name1).or(named.name);
 
         Ok(NamedExpression {
             name,
@@ -159,7 +162,7 @@ impl Convert for First1 {
     }
 }
 
-impl Convert for Punctuated2 {
+impl Convert for Cat1 {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
         let mut iter = self.into_iter();
         let first = iter.next().unwrap().convert(context)?;
@@ -208,8 +211,8 @@ impl Convert for Term1 {
 
 impl Convert for Fix1 {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
-        let arg = self.ident1.into();
-        let expr = *self.parens1.expr1;
+        let arg = self.arg1.into();
+        let expr = *self.inner1.expr1;
         let inner = context.with_variable(&arg, |context| expr.convert(context))?;
 
         Ok(NamedExpression {
@@ -229,7 +232,7 @@ impl Convert for CallOrVariable1 {
         let name = self.ident1.into();
 
         match self.opt2 {
-            Opt26::None1(_) => {
+            Opt20::None1(_) => {
                 let binding = context
                     .lookup(&name)
                     .ok_or_else(|| ConvertError::UndeclaredName(Box::new(name.clone())))?;
@@ -256,7 +259,7 @@ impl Convert for CallOrVariable1 {
                     },
                 })
             }
-            Opt26::Some1(s) => {
+            Opt20::Some1(s) => {
                 let args = s
                     .list1
                     .into_iter()
@@ -275,7 +278,7 @@ impl Convert for CallOrVariable1 {
 impl Literal3 {
     pub fn value(self) -> String {
         self.literal1
-            .plus1
+            .contents1
             .into_iter()
             .map(LiteralChar1::value)
             .collect()
@@ -334,71 +337,48 @@ impl Unicode1 {
     }
 }
 
-impl IntoIterator for Punctuated1 {
-    type Item = First1;
-
-    type IntoIter = Punct1Iter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        Punct1Iter(Some(self))
-    }
-}
-
-pub struct Punct1Iter(Option<Punctuated1>);
-
-impl Iterator for Punct1Iter {
-    type Item = First1;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let cat = self.0.take()?.0;
-        let first = cat.first1;
-        self.0 = cat.opt1.into();
-        Some(first)
-    }
-}
-
-impl IntoIterator for Punctuated2 {
+impl IntoIterator for Cat1 {
     type Item = Term1;
 
-    type IntoIter = Punct2Iter;
+    type IntoIter = Cat1Iter;
 
     fn into_iter(self) -> Self::IntoIter {
-        Punct2Iter(Some(self))
+        Cat1Iter(Some(self))
     }
 }
 
-pub struct Punct2Iter(Option<Punctuated2>);
+pub struct Cat1Iter(Option<Cat1>);
 
-impl Iterator for Punct2Iter {
+impl Iterator for Cat1Iter {
     type Item = Term1;
 
     fn next(&mut self) -> Option<Self::Item> {
         let cat = self.0.take()?.0;
         let term = cat.term1;
-        self.0 = cat.opt1.into();
+        self.0 = cat.next1.into();
         Some(term)
     }
 }
 
-impl IntoIterator for Plus2 {
+impl IntoIterator for Contents1 {
     type Item = LiteralChar1;
 
-    type IntoIter = Plus2Iter;
+    type IntoIter = Contents1Iter;
 
     fn into_iter(self) -> Self::IntoIter {
-        Plus2Iter(Some(self))
+        Contents1Iter(Some(self))
     }
 }
 
-pub struct Plus2Iter(Option<Plus2>);
+pub struct Contents1Iter(Option<Contents1>);
 
-impl Iterator for Plus2Iter {
+impl Iterator for Contents1Iter {
     type Item = LiteralChar1;
 
     fn next(&mut self) -> Option<Self::Item> {
         let cat = self.0.take()?.0;
         let lit = cat.literal_char1;
-        self.0 = cat.opt1.into();
+        self.0 = cat.next1.into();
         Some(lit)
     }
 }
@@ -421,7 +401,7 @@ impl Iterator for Fix192Iter {
     fn next(&mut self) -> Option<Self::Item> {
         let cat = self.0.take()?.0;
         let expr = *cat.expr1;
-        self.0 = cat.opt1.into();
+        self.0 = cat.next1.into();
         Some(expr)
     }
 }
@@ -470,8 +450,32 @@ impl Iterator for Star2Iter {
     }
 }
 
+impl IntoIterator for Alt1 {
+    type Item = First1;
+
+    type IntoIter = Alt1Iter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Alt1Iter(Some(self))
+    }
+}
+
+#[derive(Clone)]
+pub struct Alt1Iter(Option<Alt1>);
+
+impl Iterator for Alt1Iter {
+    type Item = First1;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let cat = self.0.take()?.0;
+        let first = cat.first1;
+        self.0 = cat.next1.into();
+        Some(first)
+    }
+}
+
 impl IntoIterator for List2 {
-    type Item = Ident5;
+    type Item = Ident2;
 
     type IntoIter = Fix246Iter;
 
@@ -484,93 +488,93 @@ impl IntoIterator for List2 {
 pub struct Fix246Iter(Option<Fix246>);
 
 impl Iterator for Fix246Iter {
-    type Item = Ident5;
+    type Item = Ident2;
 
     fn next(&mut self) -> Option<Self::Item> {
         let cat = self.0.take()?.0;
         let expr = cat.first1.ident1;
-        self.0 = cat.opt1.into();
+        self.0 = cat.next1.into();
         Some(expr)
     }
 }
 
-impl From<Opt34> for Option<Punctuated1> {
-    fn from(o: Opt34) -> Self {
+impl From<Next6> for Option<Alt1> {
+    fn from(o: Next6) -> Self {
         match o {
-            Opt34::None1(_) => None,
-            Opt34::Some1(s) => Some(*s.rec1),
+            Next6::None1(_) => None,
+            Next6::Some1(s) => Some(*s.rec1),
         }
     }
 }
 
-impl From<Opt32> for Option<Name> {
-    fn from(o: Opt32) -> Self {
+impl From<Args1> for Option<List2> {
+    fn from(o: Args1) -> Self {
         match o {
-            Opt32::None1(_) => None,
-            Opt32::Label1(l) => Some(l.ident1.into()),
+            Args1::None1(_) => None,
+            Args1::Some1(s) => Some(s.list1),
         }
     }
 }
 
-impl From<Opt28> for Option<Punctuated2> {
-    fn from(o: Opt28) -> Self {
+impl From<Next2> for Option<Contents1> {
+    fn from(o: Next2) -> Self {
         match o {
-            Opt28::None1(_) => None,
-            Opt28::Some1(s) => Some(*s.rec1),
+            Next2::None1(_) => None,
+            Next2::Plus1(s) => Some(*s),
         }
     }
 }
 
-impl From<Opt8> for Option<Plus2> {
-    fn from(o: Opt8) -> Self {
+impl From<Next4> for Option<Fix192> {
+    fn from(o: Next4) -> Self {
         match o {
-            Opt8::None1(_) => None,
-            Opt8::Plus1(s) => Some(*s),
-        }
-    }
-}
-
-impl From<Opt24> for Option<Fix192> {
-    fn from(o: Opt24) -> Self {
-        match o {
-            Opt24::None1(_) => None,
-            Opt24::Some1(s) => match s.opt2 {
-                Opt23::None1(_) => None,
-                Opt23::Rec1(e) => Some(*e),
+            Next4::None1(_) => None,
+            Next4::Some1(s) => match s.opt2 {
+                Opt18::None1(_) => None,
+                Opt18::Rec1(e) => Some(*e),
             },
         }
     }
 }
 
-impl From<Opt45> for Option<List2> {
-    fn from(o: Opt45) -> Self {
+impl From<Next5> for Option<Cat1> {
+    fn from(o: Next5) -> Self {
         match o {
-            Opt45::None1(_) => None,
-            Opt45::Some1(s) => Some(s.list1),
+            Next5::None1(_) => None,
+            Next5::Some1(s) => Some(*s.rec1)
         }
     }
 }
 
-impl From<Opt43> for Option<Fix246> {
-    fn from(o: Opt43) -> Self {
+impl From<Next7> for Option<Fix246> {
+    fn from(o: Next7) -> Self {
         match o {
-            Opt43::None1(_) => None,
-            Opt43::Some1(s) => match s.opt2 {
-                Opt42::None1(_) => None,
-                Opt42::Rec1(e) => Some(*e),
+            Next7::None1(_) => None,
+            Next7::Some1(s) => match s.opt2 {
+                Opt30::None1(_) => None,
+                Opt30::Rec1(e) => Some(*e),
             },
         }
     }
 }
 
-impl From<Ident3> for Name {
-    fn from(i: Ident3) -> Self {
+impl From<Name1> for Option<Name> {
+    fn from(o: Name1) -> Self {
+        match o {
+            Name1::None1(_) => None,
+            Name1::Label1(l) => Some(l.label1.to_string().into()),
+        }
+    }
+}
+
+impl From<Name2> for Name {
+    fn from(i: Name2) -> Self {
         i.to_string().into()
     }
 }
 
-impl From<Ident2> for Name {
-    fn from(i: Ident2) -> Self {
+impl From<Arg1> for Name {
+    fn from(i: Arg1) -> Self {
         i.to_string().into()
     }
 }
@@ -581,17 +585,12 @@ impl From<Ident1> for Name {
     }
 }
 
-impl From<Ident5> for Name {
-    fn from(i: Ident5) -> Self {
+impl From<Ident2> for Name {
+    fn from(i: Ident2) -> Self {
         i.to_string().into()
     }
 }
 
-impl From<Ident4> for Name {
-    fn from(i: Ident4) -> Self {
-        i.to_string().into()
-    }
-}
 
 impl From<Alt277> for Star2 {
     fn from(mut a: Alt277) -> Self {
