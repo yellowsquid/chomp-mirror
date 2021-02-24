@@ -19,3 +19,7 @@ lalrpop = "0.19.4"
 [[bench]]
 name = "json"
 harness = false
+
+[[bench]]
+name = "arith"
+harness = false
