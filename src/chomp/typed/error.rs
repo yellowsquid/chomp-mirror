@@ -117,10 +117,32 @@ impl Display for AltError {
 impl Error for AltError {}
 
 #[derive(Debug)]
+pub struct NeedGroundError {
+    pub span: Option<Span>,
+}
+
+impl From<NeedGroundError> for syn::Error {
+    fn from(other: NeedGroundError) -> Self {
+        let msg = other.to_string();
+        let span = other.span;
+        Self::new(span.unwrap_or_else(Span::call_site), msg)
+    }
+}
+
+impl Display for NeedGroundError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "expected ground type but actually function type")
+    }
+}
+
+impl Error for NeedGroundError {}
+
+#[derive(Debug)]
 pub enum TypeError {
     Cat(CatError),
     Alt(AltError),
     Variable(VariableError),
+    NeedGround(NeedGroundError),
 }
 
 impl From<CatError> for TypeError {
@@ -141,12 +163,19 @@ impl From<VariableError> for TypeError {
     }
 }
 
+impl From<NeedGroundError> for TypeError {
+    fn from(other: NeedGroundError) -> Self {
+        Self::NeedGround(other)
+    }
+}
+
 impl From<TypeError> for syn::Error {
     fn from(other: TypeError) -> Self {
         match other {
             TypeError::Cat(e) => e.into(),
             TypeError::Alt(e) => e.into(),
             TypeError::Variable(e) => e.into(),
+            TypeError::NeedGround(e) => e.into(),
         }
     }
 }
@@ -157,6 +186,7 @@ impl Display for TypeError {
             Self::Cat(e) => e.fmt(f),
             Self::Alt(e) => e.fmt(f),
             Self::Variable(e) => e.fmt(f),
+            Self::NeedGround(e) => e.fmt(f),
         }
     }
 }

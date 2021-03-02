@@ -8,10 +8,15 @@ use proc_macro2::{Ident, Span, TokenStream, TokenTree};
 use quote::{format_ident, quote, quote_spanned};
 use syn::{Index, LitStr};
 
-use crate::chomp::{Name, ast, set::FirstSet, typed::{
+use crate::chomp::{
+    ast,
+    set::FirstSet,
+    typed::{
         lower::{Backend, GenerateCode},
-        Alt, Cat, Epsilon, Fix, Literal, Type, Typed, TypedExpression, Variable,
-    }};
+        Alt, Cat, Epsilon, Fix, GroundType, Literal, Type, Typed, TypedExpression, Variable,
+    },
+    Name,
+};
 
 #[derive(Clone, Debug)]
 struct Ty {
@@ -28,7 +33,6 @@ pub struct RustBackend {
     lit_map: HashMap<String, usize>,
     cat_map: HashMap<Vec<usize>, usize>,
     alt_map: HashMap<Vec<usize>, usize>,
-    fix_map: HashMap<TypedExpression, usize>,
     var_map: HashMap<usize, usize>, // Key is fix point ID
     name_map: HashMap<Ident, usize>,
     can_char: BTreeSet<usize>,
@@ -139,7 +143,6 @@ impl Default for RustBackend {
             lit_map: HashMap::new(),
             cat_map: HashMap::new(),
             alt_map: HashMap::new(),
-            fix_map: HashMap::new(),
             var_map: HashMap::new(),
             name_map: HashMap::new(),
             can_char: BTreeSet::new(),
@@ -286,6 +289,13 @@ impl Backend for RustBackend {
     fn gen_alt(&mut self, name: Option<Name>, span: Option<Span>, alt: Alt) -> Self::Id {
         let span = span.unwrap_or_else(Span::call_site);
         let (tys, name_spans, ids) = self.recurse_exprs(alt);
+        let tys = tys
+            .into_iter()
+            .map(|ty| {
+                ty.into_ground(None)
+                    .expect("alt must have ground-typed children")
+            })
+            .collect::<Vec<_>>();
 
         if let Some(&id) = self.alt_map.get(&ids) {
             return id;
@@ -302,7 +312,7 @@ impl Backend for RustBackend {
             .map(|(idx, _)| name_parts[idx].clone());
         let (first_alts, firsts): (Vec<_>, Vec<_>) = tys
             .iter()
-            .map(Type::first_set)
+            .map(GroundType::first_set)
             .cloned()
             .enumerate()
             .filter(|(_, fs)| !fs.is_empty())
@@ -313,7 +323,7 @@ impl Backend for RustBackend {
             .unzip();
         let all_firsts = tys
             .iter()
-            .map(Type::first_set)
+            .map(GroundType::first_set)
             .cloned()
             .flat_map(FirstSet::into_iter);
 
@@ -383,12 +393,7 @@ impl Backend for RustBackend {
         let span = span.unwrap_or_else(Span::call_site);
         let inner = fix.unwrap();
 
-        if let Some(&id) = self.fix_map.get(&inner) {
-            return id;
-        }
-
         let (id, name) = self.new_type_name("Fix", name, span);
-        self.fix_map.insert(inner.clone(), id);
 
         self.data.push(Ty {
             name: TokenTree::from(name.clone()).into(),

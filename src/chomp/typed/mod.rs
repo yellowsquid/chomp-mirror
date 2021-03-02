@@ -1,5 +1,6 @@
-use std::{hash, iter};
+use std::{fmt, iter};
 
+use once_cell::sync::Lazy;
 use proc_macro2::Span;
 
 use super::{
@@ -14,17 +15,76 @@ pub mod lower;
 
 mod infer;
 
-use self::error::{AltError, CatError};
+use self::error::{AltError, CatError, NeedGroundError, TypeError};
 pub use self::infer::TypeInfer;
 
+#[derive(Clone)]
+pub enum Type {
+    Ground(GroundType),
+    Function(Box<dyn FunctionType + Send + Sync>),
+}
+
+impl Type {
+    pub fn as_ground(&self, span: Option<Span>) -> Result<&GroundType, NeedGroundError> {
+        match self {
+            Self::Ground(ty) => Ok(ty),
+            Self::Function(_) => Err(NeedGroundError { span }),
+        }
+    }
+
+    pub fn into_ground(self, span: Option<Span>) -> Result<GroundType, NeedGroundError> {
+        match self {
+            Self::Ground(ty) => Ok(ty),
+            Self::Function(_) => Err(NeedGroundError { span }),
+        }
+    }
+}
+
+impl fmt::Debug for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ground(ty) => ty.fmt(f),
+            Self::Function(_) => write!(f, "<fn>"),
+        }
+    }
+}
+
+impl From<GroundType> for Type {
+    fn from(ty: GroundType) -> Self {
+        Self::Ground(ty)
+    }
+}
+
+impl From<Box<dyn FunctionType + Send + Sync>> for Type {
+    fn from(f: Box<dyn FunctionType + Send + Sync>) -> Self {
+        Self::Function(f)
+    }
+}
+
+pub trait FunctionType : Fn(Type) -> Result<Type, TypeError> + Send + Sync{
+    fn clone_box(&self) -> Box<dyn FunctionType + Send + Sync>;
+}
+
+impl<F: 'static + Fn(Type) -> Result<Type, TypeError> + Clone + Send + Sync> FunctionType for F {
+    fn clone_box(&self) -> Box<dyn FunctionType + Send + Sync> {
+        Box::new(self.clone()) as Box<dyn FunctionType + Send + Sync>
+    }
+}
+
+impl Clone for Box<dyn FunctionType + Send + Sync> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
+}
+
 #[derive(Debug, Default, Clone, Eq, Hash, PartialEq)]
-pub struct Type {
+pub struct GroundType {
     nullable: bool,
     first_set: FirstSet,
     flast_set: FlastSet,
 }
 
-impl Type {
+impl GroundType {
     pub const fn new(nullable: bool, first_set: FirstSet, flast_set: FlastSet) -> Self {
         Self {
             nullable,
@@ -78,20 +138,12 @@ impl Type {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct Epsilon {
-    ty: Type,
-}
+static EPSILON_TY: Lazy<Type> = Lazy::new(|| GroundType::new(true, FirstSet::default(), FlastSet::default()).into());
 
-impl From<ast::Epsilon> for Epsilon {
-    fn from(_: ast::Epsilon) -> Self {
-        Self {
-            ty: Type::new(true, FirstSet::default(), FlastSet::default()),
-        }
-    }
-}
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Epsilon;
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Literal {
     inner: ast::Literal,
     ty: Type,
@@ -105,7 +157,7 @@ impl Literal {
 
 impl From<ast::Literal> for Literal {
     fn from(inner: ast::Literal) -> Self {
-        let ty = Type::of_str(&inner);
+        let ty = GroundType::of_str(&inner).into();
         Self { inner, ty }
     }
 }
@@ -116,7 +168,7 @@ impl From<Literal> for ast::Literal {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Cat {
     terms: Vec<TypedExpression>,
     ty: Type,
@@ -128,22 +180,24 @@ impl Cat {
         punct: Option<Span>,
         second: TypedExpression,
         rest: I,
-    ) -> Result<Self, CatError> {
-        if first.get_type().nullable() {
-            return Err(CatError::FirstNullable { expr: first, punct });
+    ) -> Result<Self, TypeError> {
+        let first_ty = first.get_type().as_ground(punct)?;
+        if first_ty.nullable() {
+            return Err(CatError::FirstNullable { expr: first, punct }.into());
         }
 
         iter::once((punct, second))
             .chain(rest)
             .try_fold(
-                (first.get_type().clone(), vec![first]),
+                (first_ty.clone(), vec![first]),
                 |(ty, mut terms), (punct, right)| {
+                    let right_ty = right.get_type().as_ground(punct)?;
                     if ty
                         .flast_set()
-                        .intersect_first(right.get_type().first_set())
+                        .intersect_first(right_ty.first_set())
                         .is_empty()
                     {
-                        let ty = ty.cat(right.get_type().clone());
+                        let ty = ty.cat(right_ty.clone());
                         terms.push(right);
                         Ok((ty, terms))
                     } else {
@@ -151,11 +205,11 @@ impl Cat {
                             first: terms,
                             punct,
                             next: right,
-                        })
+                        }.into())
                     }
                 },
             )
-            .map(|(ty, terms)| Self { ty, terms })
+            .map(|(ty, terms)| Self { ty: ty.into(), terms })
     }
 }
 
@@ -169,7 +223,7 @@ impl IntoIterator for Cat {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Alt {
     terms: Vec<TypedExpression>,
     ty: Type,
@@ -181,24 +235,25 @@ impl Alt {
         punct: Option<Span>,
         second: TypedExpression,
         rest: I,
-    ) -> Result<Self, AltError> {
+    ) -> Result<Self, TypeError> {
         iter::once((punct, second))
             .chain(rest)
             .try_fold(
-                (first.get_type().clone(), vec![first]),
+                (first.get_type().as_ground(punct)?.clone(), vec![first]),
                 |(ty, mut terms), (punct, right)| {
-                    if ty.nullable() && right.get_type().nullable() {
+                    let right_ty = right.get_type().as_ground(punct)?;
+                    if ty.nullable() && right_ty.nullable() {
                         Err(AltError::BothNullable {
                             left: terms,
                             punct,
                             right,
-                        })
+                        }.into())
                     } else if ty
                         .first_set()
-                        .intersect(right.get_type().first_set())
+                        .intersect(right_ty.first_set())
                         .is_empty()
                     {
-                        let ty = ty.alt(right.get_type().clone());
+                        let ty = ty.alt(right_ty.clone());
                         terms.push(right);
                         Ok((ty, terms))
                     } else {
@@ -206,11 +261,11 @@ impl Alt {
                             left: terms,
                             punct,
                             right,
-                        })
+                        }.into())
                     }
                 },
             )
-            .map(|(ty, terms)| Self { ty, terms })
+            .map(|(ty, terms)| Self { ty: ty.into(), terms })
     }
 }
 
@@ -224,7 +279,7 @@ impl IntoIterator for Alt {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Fix {
     inner: Box<TypedExpression>,
 }
@@ -235,7 +290,7 @@ impl Fix {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Variable {
     inner: ast::Variable,
     ty: Type,
@@ -247,7 +302,7 @@ impl Variable {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug)]
 enum RawTypedExpression {
     Epsilon(Epsilon),
     Literal(Literal),
@@ -300,23 +355,14 @@ pub struct TypedExpression {
     pub span: Option<Span>,
 }
 
-impl PartialEq for TypedExpression {
-    fn eq(&self, other: &Self) -> bool {
-        self.inner == other.inner && self.name == other.name
-    }
-}
-
-impl Eq for TypedExpression {}
-
-impl hash::Hash for TypedExpression {
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.inner.hash(state);
-        self.name.hash(state);
-    }
-}
-
 pub trait Typed {
     fn get_type(&self) -> &Type;
+}
+
+impl Typed for Epsilon {
+    fn get_type(&self) -> &Type {
+        &EPSILON_TY
+    }
 }
 
 macro_rules! leaf_typed {
@@ -329,7 +375,6 @@ macro_rules! leaf_typed {
     };
 }
 
-leaf_typed!(Epsilon, ty);
 leaf_typed!(Literal, ty);
 leaf_typed!(Cat, ty);
 leaf_typed!(Alt, ty);

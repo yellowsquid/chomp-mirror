@@ -1,8 +1,8 @@
 use crate::chomp::ast::Variable;
 
-use super::Type;
+use super::{GroundType, Type};
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Context {
     vars: Vec<Type>,
     unguard_points: Vec<usize>,

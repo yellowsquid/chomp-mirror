@@ -9,10 +9,9 @@ use crate::chomp::{
 use super::{
     context::Context,
     error::{TypeError, VariableError},
-    Type, Typed, TypedExpression,
+    GroundType, Typed, TypedExpression,
 };
 
-#[derive(Debug)]
 pub struct TypeInfer<'a> {
     pub context: &'a mut Context,
 }
@@ -20,9 +19,9 @@ pub struct TypeInfer<'a> {
 impl Folder for TypeInfer<'_> {
     type Out = Result<TypedExpression, TypeError>;
 
-    fn fold_epsilon(&mut self, name: Option<Name>, span: Option<Span>, eps: Epsilon) -> Self::Out {
+    fn fold_epsilon(&mut self, name: Option<Name>, span: Option<Span>, _eps: Epsilon) -> Self::Out {
         Ok(TypedExpression {
-            inner: super::Epsilon::from(eps).into(),
+            inner: super::Epsilon.into(),
             name,
             span,
         })
@@ -76,14 +75,15 @@ impl Folder for TypeInfer<'_> {
     }
 
     fn fold_fix(&mut self, name: Option<Name>, span: Option<Span>, fix: Fix) -> Self::Out {
-        let mut ty = Type::default();
+        let mut ty = GroundType::default();
 
         loop {
             let last = ty;
-            let res = self.context.with_variable_type(last.clone(), |context| {
+            let res = self.context.with_variable_type(last.clone().into(), |context| {
                 fix.inner.clone().fold(&mut TypeInfer { context })
             })?;
-            ty = res.get_type().clone();
+
+            ty = res.get_type().as_ground(span)?.clone();
 
             if last == ty {
                 return Ok(TypedExpression {
