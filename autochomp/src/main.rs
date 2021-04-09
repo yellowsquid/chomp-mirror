@@ -7,7 +7,7 @@ use std::{
 use chewed::{IterWrapper, Parser};
 use chomp::{
     chomp::{
-        ast::substitute::InlineCalls,
+        ast::substitute::InlineGlobal,
         typed::{
             context::Context,
             lower::{Backend, GenerateCode},
@@ -32,7 +32,7 @@ fn main() {
         .and_then(|(funs, goal)| {
             funs.into_iter()
                 .try_rfold(goal, |goal, function| {
-                    goal.fold(&mut InlineCalls { function })
+                    goal.fold(&mut InlineGlobal { function })
                 })
                 .map_err(|e| Box::new(e) as Box<dyn Error>)
         })

@@ -291,15 +291,16 @@ impl Fix {
 }
 
 #[derive(Clone, Debug)]
-pub struct Variable {
-    inner: ast::Variable,
+pub struct Call {
+    fun: Box<TypedExpression>,
+    args: Vec<TypedExpression>,
     ty: Type,
 }
 
-impl Variable {
-    pub fn index(&self) -> usize {
-        self.inner.index
-    }
+#[derive(Clone, Debug)]
+pub struct Function {
+    args: Vec<Option<Name>>,
+    expr: Box<TypedExpression>,
 }
 
 #[derive(Clone, Debug)]
@@ -309,7 +310,8 @@ enum RawTypedExpression {
     Cat(Cat),
     Alt(Alt),
     Fix(Fix),
-    Variable(Variable),
+    Call(Call),
+    Function(Function),
 }
 
 impl From<Epsilon> for RawTypedExpression {
@@ -342,9 +344,15 @@ impl From<Fix> for RawTypedExpression {
     }
 }
 
-impl From<Variable> for RawTypedExpression {
-    fn from(var: Variable) -> Self {
-        Self::Variable(var)
+impl From<Call> for RawTypedExpression {
+    fn from(call: Call) -> Self {
+        Self::Call(call)
+    }
+}
+
+impl From<Function> for RawTypedExpression {
+    fn from(fun: Function) -> Self {
+        Self::Function(fun)
     }
 }
 

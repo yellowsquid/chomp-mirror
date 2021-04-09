@@ -1,6 +1,6 @@
 use chomp::{
     chomp::{
-        ast::substitute::InlineCalls,
+        ast::substitute::InlineGlobal,
         typed::{
             context::Context,
             lower::{Backend, GenerateCode},
@@ -21,7 +21,7 @@ pub fn nibble(item: TokenStream) -> TokenStream {
         .and_then(|(funs, goal)| {
             funs.into_iter()
                 .try_rfold(goal, |goal, function| {
-                    goal.fold(&mut InlineCalls { function })
+                    goal.fold(&mut InlineGlobal { function })
                 })
                 .map_err(Error::from)
         })

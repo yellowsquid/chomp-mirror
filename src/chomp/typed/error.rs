@@ -7,12 +7,12 @@ use proc_macro2::Span;
 
 use crate::chomp::{ast::Variable, Name};
 
-use super::{context::GetVariableError, TypedExpression};
+use super::{context::GetParameterError, TypedExpression};
 
 /// A type error when using a fix point variable.
 #[derive(Debug)]
 pub struct VariableError {
-    pub inner: GetVariableError,
+    pub inner: GetParameterError,
     pub var: Variable,
     pub span: Option<Span>,
     pub name: Option<Name>,
@@ -29,8 +29,8 @@ impl From<VariableError> for syn::Error {
 impl Display for VariableError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.inner {
-            GetVariableError::FreeVariable => write!(f, "unbound variable: "),
-            GetVariableError::GuardedVariable => write!(f, "usage of guarded variable: "),
+            GetParameterError::FreeParameter => write!(f, "unbound variable: "),
+            GetParameterError::GuardedParameter => write!(f, "usage of guarded variable: "),
         }?;
 
         if let Some(name) = &self.name {

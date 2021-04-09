@@ -102,17 +102,6 @@ impl PartialEq for Fix {
 impl Eq for Fix {}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct Variable {
-    pub index: usize,
-}
-
-impl Display for Variable {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "'{}", self.index)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Parameter {
     pub index: usize,
 }
@@ -123,34 +112,64 @@ impl Display for Parameter {
     }
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Global {
+    pub name: Name,
+}
+
+impl Display for Global {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "'{}", self.name)
+    }
+}
+
 /// A macro invocation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Call {
-    pub name: Name,
+    pub fun: Box<NamedExpression>,
     pub args: Vec<NamedExpression>,
 }
 
 impl Display for Call {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name)?;
+        write!(f, "({})(", self.fun)?;
 
         let mut iter = self.args.iter();
 
         if let Some(arg) = iter.next() {
-            write!(f, "({}", arg)?;
+            write!(f, "{}", arg)?;
 
             for arg in iter {
                 write!(f, ", {}", arg)?;
             }
-
-            write!(f, ")")
-        } else {
-            Ok(())
         }
+
+        write!(f, ")")
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Function {
+    pub args: Vec<Name>,
+    pub expr: Box<NamedExpression>,
+}
+
+impl Display for Function {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[")?;
+        let mut iter = self.args.iter();
+        if let Some(arg) = iter.next() {
+            write!(f, "{}", arg)?;
+            for arg in iter {
+                write!(f, ", {}", arg)?;
+            }
+        }
+
+        write!(f, "]")
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expression {
     /// Matches the empty string.
     Epsilon(Epsilon),
@@ -162,12 +181,14 @@ pub enum Expression {
     Alt(Alt),
     /// The least fix point of a term.
     Fix(Fix),
-    /// A fixed point variable.
-    Variable(Variable),
     /// A formal parameter.
     Parameter(Parameter),
-    /// A macro invocation.
+    /// A global variable.
+    Global(Global),
+    /// A function invocation.
     Call(Call),
+    /// A function definition.
+    Function(Function)
 }
 
 impl Display for Expression {
@@ -178,71 +199,13 @@ impl Display for Expression {
             Self::Cat(c) => c.fmt(f),
             Self::Alt(a) => a.fmt(f),
             Self::Fix(x) => x.fmt(f),
-            Self::Variable(v) => v.fmt(f),
+            Self::Global(g) => g.fmt(f),
             Self::Parameter(p) => p.fmt(f),
             Self::Call(c) => c.fmt(f),
+            Self::Function(n) => n.fmt(f),
         }
     }
 }
-
-impl PartialEq for Expression {
-    fn eq(&self, other: &Self) -> bool {
-        match self {
-            Self::Epsilon(_) => matches!(other, Self::Epsilon(_)),
-            Self::Literal(l) => {
-                if let Self::Literal(them) = other {
-                    l == them
-                } else {
-                    false
-                }
-            }
-            Self::Cat(c) => {
-                if let Self::Cat(them) = other {
-                    c == them
-                } else {
-                    false
-                }
-            }
-            Self::Alt(a) => {
-                if let Self::Alt(them) = other {
-                    a == them
-                } else {
-                    false
-                }
-            }
-            Self::Fix(f) => {
-                if let Self::Fix(them) = other {
-                    f == them
-                } else {
-                    false
-                }
-            }
-            Self::Variable(v) => {
-                if let Self::Variable(them) = other {
-                    v == them
-                } else {
-                    false
-                }
-            }
-            Self::Parameter(p) => {
-                if let Self::Parameter(them) = other {
-                    p == them
-                } else {
-                    false
-                }
-            }
-            Self::Call(c) => {
-                if let Self::Call(them) = other {
-                    c == them
-                } else {
-                    false
-                }
-            }
-        }
-    }
-}
-
-impl Eq for Expression {}
 
 impl From<Epsilon> for Expression {
     fn from(eps: Epsilon) -> Self {
@@ -274,21 +237,27 @@ impl From<Fix> for Expression {
     }
 }
 
-impl From<Variable> for Expression {
-    fn from(var: Variable) -> Self {
-        Self::Variable(var)
-    }
-}
-
 impl From<Parameter> for Expression {
     fn from(param: Parameter) -> Self {
         Self::Parameter(param)
     }
 }
 
+impl From<Global> for Expression {
+    fn from(global: Global) -> Self {
+        Self::Global(global)
+    }
+}
+
 impl From<Call> for Expression {
     fn from(call: Call) -> Self {
         Self::Call(call)
+    }
+}
+
+impl From<Function> for Expression {
+    fn from(fun: Function) -> Self {
+        Self::Function(fun)
     }
 }
 
@@ -315,11 +284,3 @@ impl PartialEq for NamedExpression {
 }
 
 impl Eq for NamedExpression {}
-
-#[derive(Clone, Debug)]
-pub struct Function {
-    pub name: Name,
-    pub params: Vec<Option<Name>>,
-    pub expr: NamedExpression,
-    pub span: Option<Span>,
-}

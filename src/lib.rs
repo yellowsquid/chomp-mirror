@@ -11,7 +11,6 @@
 #![warn(non_ascii_idents)]
 #![warn(private_doc_tests)]
 #![warn(single_use_lifetimes)]
-#![warn(trivial_casts)]
 #![warn(trivial_numeric_casts)]
 #![warn(unaligned_references)]
 #![warn(unreachable_pub)]

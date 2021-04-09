@@ -1,10 +1,13 @@
-use crate::chomp::ast::Variable;
+use std::collections::HashMap;
+
+use crate::chomp::ast::Parameter;
 
 use super::{GroundType, Type};
 
 #[derive(Default)]
 pub struct Context {
-    vars: Vec<Type>,
+    vars: Vec<(Type, bool)>,
+    globals: HashMap<String, Type>,
     unguard_points: Vec<usize>,
 }
 
@@ -24,27 +27,38 @@ impl Context {
         res
     }
 
-    pub fn get_variable_type(&self, var: Variable) -> Result<&Type, GetVariableError> {
+    pub fn get_param_type(&self, param: Parameter) -> Result<&Type, GetParameterError> {
         self.vars
             .iter()
-            .nth_back(var.index)
-            .ok_or(GetVariableError::FreeVariable)
-            .and_then(|ty| {
-                self.unguard_points
-                    .last()
-                    .and_then(|point| {
-                        if point + var.index >= self.vars.len() {
-                            Some(ty)
-                        } else {
-                            None
-                        }
-                    })
-                    .ok_or(GetVariableError::GuardedVariable)
+            .nth_back(param.index)
+            .ok_or(GetParameterError::FreeParameter)
+            .and_then(|(ty, unguard)| {
+                if *unguard {
+                    Ok(ty)
+                } else {
+                    self.unguard_points
+                        .last()
+                        .and_then(|point| {
+                            if point + param.index >= self.vars.len() {
+                                Some(ty)
+                            } else {
+                                None
+                            }
+                        })
+                        .ok_or(GetParameterError::GuardedParameter)
+                }
             })
     }
 
-    pub fn with_variable_type<F: FnOnce(&mut Self) -> R, R>(&mut self, ty: Type, f: F) -> R {
-        self.vars.push(ty);
+    pub fn with_fixed_point_type<F: FnOnce(&mut Self) -> R, R>(&mut self, ty: Type, f: F) -> R {
+        self.vars.push((ty, false));
+        let res = f(self);
+        self.vars.pop();
+        res
+    }
+
+    pub fn with_parameter_type<F: FnOnce(&mut Self) -> R, R>(&mut self, ty: Type, f: F) -> R {
+        self.vars.push((ty, true));
         let res = f(self);
         self.vars.pop();
         res
@@ -52,7 +66,7 @@ impl Context {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GetVariableError {
-    FreeVariable,
-    GuardedVariable,
+pub enum GetParameterError {
+    FreeParameter,
+    GuardedParameter,
 }

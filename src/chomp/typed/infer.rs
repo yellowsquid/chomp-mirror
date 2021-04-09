@@ -1,7 +1,7 @@
 use proc_macro2::Span;
 
 use crate::chomp::{
-    ast::{Alt, Call, Cat, Epsilon, Fix, Literal, Parameter, Variable},
+    ast::{Alt, Call, Cat, Epsilon, Fix, Function, Global, Literal, Parameter},
     visit::{Folder, Visitable},
     Name,
 };
@@ -79,9 +79,11 @@ impl Folder for TypeInfer<'_> {
 
         loop {
             let last = ty;
-            let res = self.context.with_variable_type(last.clone().into(), |context| {
-                fix.inner.clone().fold(&mut TypeInfer { context })
-            })?;
+            let res = self
+                .context
+                .with_variable_type(last.clone().into(), |context| {
+                    fix.inner.clone().fold(&mut TypeInfer { context })
+                })?;
 
             ty = res.get_type().as_ground(span)?.clone();
 
@@ -98,31 +100,6 @@ impl Folder for TypeInfer<'_> {
         }
     }
 
-    fn fold_variable(
-        &mut self,
-        name: Option<Name>,
-        span: Option<Span>,
-        var: Variable,
-    ) -> Self::Out {
-        let ty = match self.context.get_variable_type(var) {
-            Ok(ty) => ty.clone(),
-            Err(inner) => {
-                return Err(VariableError {
-                    inner,
-                    var,
-                    span,
-                    name,
-                }
-                .into())
-            }
-        };
-        Ok(TypedExpression {
-            inner: super::Variable { inner: var, ty }.into(),
-            name,
-            span,
-        })
-    }
-
     fn fold_parameter(
         &mut self,
         _name: Option<Name>,
@@ -132,7 +109,20 @@ impl Folder for TypeInfer<'_> {
         unimplemented!()
     }
 
+    fn fold_global(&mut self, name: Option<Name>, span: Option<Span>, global: Global) -> Self::Out {
+        todo!()
+    }
+
     fn fold_call(&mut self, _name: Option<Name>, _span: Option<Span>, _call: Call) -> Self::Out {
         unimplemented!()
+    }
+
+    fn fold_function(
+        &mut self,
+        name: Option<Name>,
+        span: Option<Span>,
+        fun: Function,
+    ) -> Self::Out {
+        todo!()
     }
 }
