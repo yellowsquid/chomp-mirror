@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt, mem};
+use std::{fmt, mem};
 
 use proc_macro2::Span;
 use syn::{punctuated::Pair, Token};
@@ -8,62 +8,42 @@ use crate::chomp::{
     Name,
 };
 
-use super::{Alt, Call, Cat, Fix, Ident, Labelled, ParenExpression, Term};
-
-#[derive(Clone, Copy, Debug)]
-pub enum Binding {
-    Variable(usize),
-    Parameter(usize),
-    Global,
-}
+use super::{Alt, Call, Cat, Expression, Fix, Ident, Labelled, Lambda, ParenExpression, Term};
 
 #[derive(Debug, Default)]
 pub struct Context {
-    names: HashMap<String, Binding>,
-    vars: usize,
+    bindings: Vec<Name>,
 }
 
 impl Context {
-    pub fn new<I: IntoIterator<Item = Name>>(globals: &[Name], params: I) -> Self {
-        let mut names = HashMap::new();
-        for global in globals {
-            names.insert(global.to_string(), Binding::Global);
-        }
-
-        for (index, param) in params.into_iter().enumerate() {
-            names.insert(param.to_string(), Binding::Parameter(index));
-        }
-
-        Self { names, vars: 0 }
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    pub fn lookup(&self, name: &Name) -> Option<Binding> {
-        // we make variable binding cheaper by inserting wrong and pulling right.
-        match self.names.get(&name.to_string()).copied() {
-            Some(Binding::Variable(index)) => Some(Binding::Variable(self.vars - index - 1)),
-            Some(Binding::Parameter(index)) => Some(Binding::Parameter(index)),
-            Some(Binding::Global) => Some(Binding::Global),
-            None => None,
-        }
+    pub fn lookup(&self, name: &Name) -> Option<usize> {
+        self.bindings
+            .iter()
+            .enumerate()
+            .rfind(|(_, n)| *n == name)
+            .map(|(idx, _)| idx)
     }
 
-    pub fn with_variable<F: FnOnce(&mut Self) -> R, R>(&mut self, name: &Name, f: F) -> R {
-        let old = self
-            .names
-            .insert(name.to_string(), Binding::Variable(self.vars));
+    pub fn push_variable(&mut self, name: Name) {
+        self.bindings.push(name);
+    }
 
-        // we make variable binding cheaper by inserting wrong and pulling right.
-        // we should increment all values in names instead, but that's slow
-        self.vars += 1;
+    pub fn with_variable<F: FnOnce(&mut Self) -> R, R>(&mut self, name: Name, f: F) -> R {
+        self.bindings.push(name);
         let res = f(self);
-        self.vars -= 1;
+        self.bindings.pop();
+        res
+    }
 
-        if let Some(val) = old {
-            self.names.insert(name.to_string(), val);
-        } else {
-            self.names.remove(&name.to_string());
-        }
-
+    pub fn with_variables<I: IntoIterator<Item = Name>, F: FnOnce(&mut Self) -> R, R>(&mut self, names: I, f: F) -> R {
+        let len = self.bindings.len();
+        self.bindings.extend(names);
+        let res = f(self);
+        self.bindings.resize_with(len, || unreachable!());
         res
     }
 }
@@ -73,6 +53,8 @@ pub enum ConvertError {
     UndeclaredName(Box<Name>),
     EmptyCat(Option<Span>),
     EmptyAlt(Option<Span>),
+    EmptyCall(Option<Span>),
+    MissingArgs(Option<Span>),
 }
 
 impl From<ConvertError> for syn::Error {
@@ -80,7 +62,10 @@ impl From<ConvertError> for syn::Error {
         let msg = e.to_string();
         let span = match e {
             ConvertError::UndeclaredName(name) => name.span(),
-            ConvertError::EmptyCat(span) | ConvertError::EmptyAlt(span) => span,
+            ConvertError::EmptyCat(span)
+            | ConvertError::EmptyAlt(span)
+            | ConvertError::EmptyCall(span)
+            | ConvertError::MissingArgs(span) => span,
         };
 
         Self::new(span.unwrap_or_else(Span::call_site), msg)
@@ -99,6 +84,12 @@ impl fmt::Display for ConvertError {
             Self::EmptyAlt(_) => {
                 write!(f, "alternation has no elements")
             }
+            Self::EmptyCall(_) => {
+                write!(f, "call has no function")
+            }
+            Self::MissingArgs(_) => {
+                write!(f, "call has no arguments")
+            }
         }
     }
 }
@@ -114,49 +105,13 @@ impl Convert for Ident {
         let span = Some(self.span());
         let name = self.into();
 
-        let binding = context
+        let index = context
             .lookup(&name)
             .ok_or_else(|| ConvertError::UndeclaredName(Box::new(name.clone())))?;
 
-        Ok(match binding {
-            Binding::Variable(index) => NamedExpression {
-                name: Some(name),
-                expr: ast::Variable { index }.into(),
-                span,
-            },
-            Binding::Parameter(index) => NamedExpression {
-                name: Some(name),
-                expr: ast::Parameter { index }.into(),
-                span,
-            },
-            Binding::Global => NamedExpression {
-                name: None,
-                expr: ast::Call {
-                    name,
-                    args: Vec::new(),
-                }
-                .into(),
-                span,
-            },
-        })
-    }
-}
-
-impl Convert for Call {
-    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
-        let span = self.span();
-        let args = self
-            .args
-            .into_iter()
-            .map(|arg| arg.convert(context))
-            .collect::<Result<_, _>>()?;
         Ok(NamedExpression {
-            name: None,
-            expr: ast::Call {
-                name: self.name.into(),
-                args,
-            }
-            .into(),
+            name: Some(name),
+            expr: ast::Variable { index }.into(),
             span,
         })
     }
@@ -165,13 +120,10 @@ impl Convert for Call {
 impl Convert for Fix {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
         let span = self.span();
-        let expr = self.expr;
-        let arg = self.arg.into();
-        let inner = context.with_variable(&arg, |context| expr.convert(context))?;
+        let inner = self.expr.convert(context)?;
         Ok(NamedExpression {
             name: None,
             expr: ast::Fix {
-                arg: Some(arg),
                 inner: Box::new(inner),
             }
             .into(),
@@ -200,9 +152,35 @@ impl Convert for Term {
                 expr: l.value().into(),
                 span: Some(l.span()),
             }),
-            Self::Call(c) => c.convert(context),
             Self::Fix(f) => f.convert(context),
             Self::Parens(p) => p.convert(context),
+        }
+    }
+}
+
+impl Convert for Call {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
+        let span = self.span();
+        let mut iter = self.0.into_iter();
+        let on = iter
+            .next()
+            .ok_or_else(|| ConvertError::EmptyCall(span))?
+            .convert(context)?;
+        let args = iter
+            .map(|arg| arg.convert(context))
+            .collect::<Result<Vec<_>, _>>()?;
+        if args.is_empty() {
+            Err(ConvertError::MissingArgs(span))
+        } else {
+            Ok(NamedExpression {
+                name: None,
+                expr: ast::Call {
+                    on: Box::new(on),
+                    args,
+                }
+                .into(),
+                span,
+            })
         }
     }
 }
@@ -210,7 +188,7 @@ impl Convert for Term {
 impl Convert for Cat {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
         fn convert_pair(
-            pair: Pair<Term, Token![.]>,
+            pair: Pair<Call, Token![.]>,
             context: &mut Context,
         ) -> Result<(NamedExpression, Option<Span>), ConvertError> {
             match pair {
@@ -227,18 +205,17 @@ impl Convert for Cat {
             .ok_or(ConvertError::EmptyCat(span))
             .and_then(|pair| convert_pair(pair, context))?;
 
-        let mut rest = iter.map(|pair| {
-            convert_pair(pair, context).map(|(snd, p)| (mem::replace(&mut punct, p), snd))
-        });
+        let mut rest = iter
+            .map(|pair| {
+                convert_pair(pair, context).map(|(snd, p)| (mem::replace(&mut punct, p), snd))
+            })
+            .peekable();
 
-        if let Some(res) = rest.next() {
-            let (punct, second) = res?;
+        if let Some(_) = rest.peek() {
             Ok(NamedExpression {
                 name: None,
                 expr: ast::Cat {
                     first: Box::new(first),
-                    punct,
-                    second: Box::new(second),
                     rest: rest.collect::<Result<_, _>>()?,
                 }
                 .into(),
@@ -284,18 +261,17 @@ impl Convert for Alt {
             .ok_or(ConvertError::EmptyAlt(span))
             .and_then(|pair| convert_pair(pair, context))?;
 
-        let mut rest = iter.map(|pair| {
-            convert_pair(pair, context).map(|(snd, p)| (mem::replace(&mut punct, p), snd))
-        });
+        let mut rest = iter
+            .map(|pair| {
+                convert_pair(pair, context).map(|(snd, p)| (mem::replace(&mut punct, p), snd))
+            })
+            .peekable();
 
-        if let Some(res) = rest.next() {
-            let (punct, second) = res?;
+        if let Some(_) = rest.peek() {
             Ok(NamedExpression {
                 name: None,
                 expr: ast::Alt {
                     first: Box::new(first),
-                    punct,
-                    second: Box::new(second),
                     rest: rest.collect::<Result<_, _>>()?,
                 }
                 .into(),
@@ -303,6 +279,32 @@ impl Convert for Alt {
             })
         } else {
             Ok(first)
+        }
+    }
+}
+
+impl Convert for Lambda {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
+        let span = self.span();
+        let mut names = self.args.into_iter().map(Name::from);
+        let expr = self.expr;
+        let inner = context.with_variables(names.clone(), |ctx| expr.convert(ctx))?;
+        let first = names.next().unwrap();
+        let rest = names.collect();
+        Ok(NamedExpression {
+            name: None,
+            expr: ast::Lambda { first, rest, inner: Box::new(inner)}.into(),
+            span,
+        })
+
+    }
+}
+
+impl Convert for Expression {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
+        match self {
+            Expression::Alt(a) => a.convert(context),
+            Expression::Lambda(l) => l.convert(context),
         }
     }
 }

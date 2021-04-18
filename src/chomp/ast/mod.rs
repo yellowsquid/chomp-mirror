@@ -15,14 +15,12 @@ pub type Literal = String;
 #[derive(Clone, Debug)]
 pub struct Cat {
     pub first: Box<NamedExpression>,
-    pub punct: Option<Span>,
-    pub second: Box<NamedExpression>,
     pub rest: Vec<(Option<Span>, NamedExpression)>,
 }
 
 impl Display for Cat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "({} . {}", self.first, self.second)?;
+        write!(f, "({}", self.first)?;
         for (_, other) in &self.rest {
             write!(f, " . {}", other)?;
         }
@@ -33,7 +31,6 @@ impl Display for Cat {
 impl PartialEq for Cat {
     fn eq(&self, other: &Self) -> bool {
         self.first == other.first
-            && self.second == other.second
             && self.rest.len() == other.rest.len()
             && self
                 .rest
@@ -48,14 +45,12 @@ impl Eq for Cat {}
 #[derive(Clone, Debug)]
 pub struct Alt {
     pub first: Box<NamedExpression>,
-    pub punct: Option<Span>,
-    pub second: Box<NamedExpression>,
-    pub rest: Vec<(Option<Span>, NamedExpression)>,
+    pub rest: Vec<(Option<Span>, NamedExpression)>
 }
 
 impl Display for Alt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "({} | {}", self.first, self.second)?;
+        write!(f, "({}", self.first)?;
         for (_, other) in &self.rest {
             write!(f, " | {}", other)?;
         }
@@ -66,7 +61,6 @@ impl Display for Alt {
 impl PartialEq for Alt {
     fn eq(&self, other: &Self) -> bool {
         self.first == other.first
-            && self.second == other.second
             && self.rest.len() == other.rest.len()
             && self
                 .rest
@@ -78,28 +72,16 @@ impl PartialEq for Alt {
 
 impl Eq for Alt {}
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Fix {
-    pub arg: Option<Name>,
     pub inner: Box<NamedExpression>,
 }
 
 impl Display for Fix {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.arg {
-            Some(arg) => write!(f, "[{}]({})", arg, self.inner),
-            None => write!(f, "[]({})", self.inner),
-        }
+        write!(f, "!{}", self.inner)
     }
 }
-
-impl PartialEq for Fix {
-    fn eq(&self, other: &Self) -> bool {
-        self.inner == other.inner
-    }
-}
-
-impl Eq for Fix {}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Variable {
@@ -112,41 +94,40 @@ impl Display for Variable {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct Parameter {
-    pub index: usize,
-}
-
-impl Display for Parameter {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "<{}>", self.index)
-    }
-}
-
-/// A macro invocation.
+/// A function invocation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Call {
-    pub name: Name,
+    pub on: Box<NamedExpression>,
     pub args: Vec<NamedExpression>,
 }
 
 impl Display for Call {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name)?;
+        write!(f, "({}", self.on)?;
 
-        let mut iter = self.args.iter();
-
-        if let Some(arg) = iter.next() {
-            write!(f, "({}", arg)?;
-
-            for arg in iter {
-                write!(f, ", {}", arg)?;
-            }
-
-            write!(f, ")")
-        } else {
-            Ok(())
+        for arg in self.args {
+            write!(f, " {}", arg)?;
         }
+
+        write!(f, ")")
+    }
+}
+
+/// A function abstraction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Lambda {
+    pub first: Name,
+    pub rest: Vec<Name>,
+    pub inner: Box<NamedExpression>,
+}
+
+impl Display for Lambda {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "/{}", self.first)?;
+        for name in self.rest {
+            write!(f, ", {}", name)?;
+        }
+        write!(f, "/ {}", self.inner)
     }
 }
 
@@ -164,10 +145,10 @@ pub enum Expression {
     Fix(Fix),
     /// A fixed point variable.
     Variable(Variable),
-    /// A formal parameter.
-    Parameter(Parameter),
-    /// A macro invocation.
+    /// A function invocation.
     Call(Call),
+    /// A function abstraction.
+    Lambda(Lambda),
 }
 
 impl Display for Expression {
@@ -179,7 +160,7 @@ impl Display for Expression {
             Self::Alt(a) => a.fmt(f),
             Self::Fix(x) => x.fmt(f),
             Self::Variable(v) => v.fmt(f),
-            Self::Parameter(p) => p.fmt(f),
+            Self::Lambda(p) => p.fmt(f),
             Self::Call(c) => c.fmt(f),
         }
     }
@@ -224,8 +205,8 @@ impl PartialEq for Expression {
                     false
                 }
             }
-            Self::Parameter(p) => {
-                if let Self::Parameter(them) = other {
+            Self::Lambda(p) => {
+                if let Self::Lambda(them) = other {
                     p == them
                 } else {
                     false
@@ -280,9 +261,9 @@ impl From<Variable> for Expression {
     }
 }
 
-impl From<Parameter> for Expression {
-    fn from(param: Parameter) -> Self {
-        Self::Parameter(param)
+impl From<Lambda> for Expression {
+    fn from(lambda: Lambda) -> Self {
+        Self::Lambda(lambda)
     }
 }
 
@@ -317,11 +298,16 @@ impl PartialEq for NamedExpression {
 impl Eq for NamedExpression {}
 
 #[derive(Clone, Debug)]
-pub struct Function {
+pub struct Let {
     pub name: Name,
-    pub params: Vec<Option<Name>>,
-    pub expr: NamedExpression,
-    pub span: Option<Span>,
+    pub val: NamedExpression,
+    pub inner: Box<TopLevel>,
+}
+
+#[derive(Clone, Debug)]
+pub enum TopLevel {
+    Let(Let),
+    Goal(NamedExpression),
 }
 
 impl PartialEq for Function {

@@ -13,7 +13,7 @@ use syn::{
     LitStr, Token,
 };
 
-use crate::chomp::{ast, Name};
+use crate::chomp::{Name, ast::{self, TopLevel}};
 
 use convert::{Context, Convert, ConvertError};
 
@@ -69,63 +69,29 @@ impl<T: fmt::Debug> fmt::Debug for ArgList<T> {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct Call {
-    pub name: Ident,
-    pub args: ArgList<Expression>,
-}
-
-impl Call {
-    pub fn span(&self) -> Option<Span> {
-        self.name.span().join(self.args.span())
-    }
-}
-
-impl Parse for Call {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let name = input.call(Ident::parse_any)?;
-        let args = input.parse()?;
-        Ok(Self { name, args })
-    }
-}
-
 #[derive(Clone)]
 pub struct Fix {
-    bracket_token: Bracket,
-    pub arg: Ident,
-    paren_token: Paren,
-    pub expr: Expression,
+    bang_token: Token![!],
+    pub expr: Box<Term>,
 }
 
 impl Fix {
     pub fn span(&self) -> Option<Span> {
-        self.bracket_token.span.join(self.paren_token.span)
+        self.bang_token.span.join(self.expr.span()?)
     }
 }
 
 impl Parse for Fix {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let arg;
-        let bracket_token = bracketed!(arg in input);
-        let arg = arg.call(Ident::parse_any)?;
-        let expr;
-        let paren_token = parenthesized!(expr in input);
-        let expr = expr.parse()?;
-        Ok(Self {
-            bracket_token,
-            arg,
-            paren_token,
-            expr,
-        })
+        let bang_token = input.parse()?;
+        let expr = input.parse()?;
+        Ok(Self { bang_token, expr })
     }
 }
 
 impl fmt::Debug for Fix {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Fix")
-            .field("arg", &self.arg)
-            .field("expr", &self.expr)
-            .finish()
+        f.debug_struct("Fix").field("expr", &self.expr).finish()
     }
 }
 
@@ -157,7 +123,6 @@ pub enum Term {
     Epsilon(Epsilon),
     Ident(Ident),
     Literal(Literal),
-    Call(Call),
     Fix(Fix),
     Parens(ParenExpression),
 }
@@ -168,7 +133,6 @@ impl Term {
             Self::Epsilon(e) => Some(e.span),
             Self::Ident(i) => Some(i.span()),
             Self::Literal(l) => Some(l.span()),
-            Self::Call(c) => c.span(),
             Self::Fix(f) => f.span(),
             Self::Parens(p) => Some(p.paren_token.span),
         }
@@ -183,18 +147,12 @@ impl Parse for Term {
             input.parse().map(Self::Epsilon)
         } else if lookahead.peek(LitStr) {
             input.parse().map(Self::Literal)
-        } else if lookahead.peek(Bracket) {
+        } else if lookahead.peek(Token![!]) {
             input.parse().map(Self::Fix)
         } else if lookahead.peek(Paren) {
             input.parse().map(Self::Parens)
         } else if lookahead.peek(Ident::peek_any) {
-            let name = input.call(Ident::parse_any)?;
-
-            if input.peek(Paren) {
-                input.parse().map(|args| Self::Call(Call { name, args }))
-            } else {
-                Ok(Self::Ident(name))
-            }
+            input.call(Ident::parse_any).map(Self::Ident)
         } else {
             Err(lookahead.error())
         }
@@ -207,15 +165,47 @@ impl fmt::Debug for Term {
             Term::Epsilon(_) => write!(f, "Term::Epsilon"),
             Term::Ident(i) => write!(f, "Term::Ident({:?})", i),
             Term::Literal(l) => write!(f, "Term::Literal({:?})", l.value()),
-            Term::Call(c) => write!(f, "Term::Call({:?})", c),
             Term::Fix(x) => write!(f, "Term::Fix({:?})", x),
             Term::Parens(p) => write!(f, "Term::Parens({:?})", p),
         }
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct Call(pub Vec<Term>);
+
+impl Call {
+    pub fn span(&self) -> Option<Span> {
+        let mut iter = self.0.iter();
+        let first = iter.next()?.span()?;
+        iter.try_fold(first, |span, t| t.span().and_then(|s| span.join(s)))
+    }
+}
+
+impl Parse for Call {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut out = Vec::new();
+        out.push(input.parse()?);
+        loop {
+            let lookahead = input.lookahead1();
+            if lookahead.peek(Token![_])
+                || lookahead.peek(LitStr)
+                || lookahead.peek(Token![!])
+                || lookahead.peek(Paren)
+                || lookahead.peek(Ident::peek_any)
+            {
+                out.push(input.parse()?);
+            } else {
+                break;
+            }
+        }
+
+        Ok(Self(out))
+    }
+}
+
 #[derive(Clone)]
-pub struct Cat(pub Punctuated<Term, Token![.]>);
+pub struct Cat(pub Punctuated<Call, Token![.]>);
 
 impl Parse for Cat {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -335,56 +325,57 @@ impl fmt::Debug for Alt {
         f.debug_list().entries(self.0.iter()).finish()
     }
 }
-
-pub type Expression = Alt;
-
 #[derive(Clone)]
-pub struct LetStatement {
-    let_token: Token![let],
-    name: Ident,
-    args: Option<ArgList<Ident>>,
-    eq_token: Token![=],
-    expr: Expression,
-    semi_token: Token![;],
+pub struct Lambda {
+    slash_tok_left: Token![/],
+    pub args: ArgList<Ident>,
+    slash_tok_right: Token![/],
+    pub expr: Alt,
 }
 
-impl LetStatement {
+impl Lambda {
     pub fn span(&self) -> Option<Span> {
-        self.let_token.span.join(self.semi_token.span)
+        self.slash_tok_left.span.join(self.expr.span()?)
     }
 }
 
-impl Parse for LetStatement {
+impl Parse for Lambda {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let let_token = input.parse()?;
-        let name = input.call(Ident::parse_any)?;
-        let args = if input.peek(Paren) {
-            Some(input.parse()?)
-        } else {
-            None
-        };
-        let eq_token = input.parse()?;
+        let slash_tok_left = input.parse()?;
+        let args = input.parse()?;
+        let slash_tok_right = input.parse()?;
         let expr = input.parse()?;
-        let semi_token = input.parse()?;
-
         Ok(Self {
-            let_token,
-            name,
+            slash_tok_left,
             args,
-            eq_token,
+            slash_tok_right,
             expr,
-            semi_token,
         })
     }
 }
 
-impl fmt::Debug for LetStatement {
+impl fmt::Debug for Lambda {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LetStatement")
-            .field("name", &self.name)
+        f.debug_struct("Lambda")
             .field("args", &self.args)
             .field("expr", &self.expr)
             .finish()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Expression {
+    Alt(Alt),
+    Lambda(Lambda),
+}
+
+impl Parse for Expression {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(Token![/]) {
+            input.parse().map(Self::Lambda)
+        } else {
+            input.parse().map(Self::Alt)
+        }
     }
 }
 
@@ -417,58 +408,104 @@ impl fmt::Debug for GoalStatement {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct File {
-    lets: Vec<LetStatement>,
-    goal: GoalStatement,
+#[derive(Clone)]
+pub struct LetStatement {
+    let_token: Token![let],
+    name: Ident,
+    args: Option<ArgList<Ident>>,
+    eq_token: Token![=],
+    expr: Expression,
+    semi_token: Token![;],
+    next: Box<Statement>,
 }
 
-impl File {
-    pub fn convert(self) -> Result<(Vec<ast::Function>, ast::NamedExpression), ConvertError> {
-        let mut names = Vec::new();
-        let mut map = Vec::new();
-        for stmt in self.lets {
-            let span = stmt.span();
-            let name: Name = stmt.name.into();
-            let params = stmt
-                .args
-                .into_iter()
-                .flat_map(ArgList::into_iter)
-                .map(Name::from);
-            let mut context = Context::new(&names, params.clone());
-            let mut expr = stmt.expr.convert(&mut context)?;
-            names.push(name.clone());
-            expr.name = Some(name.clone());
-            map.push(ast::Function {
-                name,
-                params: params.map(Some).collect(),
-                expr,
-                span,
-            });
-        }
+impl Parse for LetStatement {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let let_token = input.parse()?;
+        let name = input.call(Ident::parse_any)?;
+        let args = if input.peek(Paren) {
+            Some(input.parse()?)
+        } else {
+            None
+        };
+        let eq_token = input.parse()?;
+        let expr = input.parse()?;
+        let semi_token = input.parse()?;
+        let next = Box::new(input.parse()?);
 
-        let mut context = Context::new(&names, Vec::new());
-        let goal = self.goal.expr.convert(&mut context)?;
-        Ok((map, goal))
+        Ok(Self {
+            let_token,
+            name,
+            args,
+            eq_token,
+            expr,
+            semi_token,
+            next,
+        })
     }
 }
 
-impl Parse for File {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut lets = Vec::new();
-        let mut lookahead = input.lookahead1();
+impl fmt::Debug for LetStatement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LetStatement")
+            .field("name", &self.name)
+            .field("args", &self.args)
+            .field("expr", &self.expr)
+            .field("next", &self.next)
+            .finish()
+    }
+}
 
-        while lookahead.peek(Let) {
-            lets.push(input.parse()?);
-            lookahead = input.lookahead1();
+#[derive(Clone, Debug)]
+pub enum Statement {
+    Goal(GoalStatement),
+    Let(LetStatement),
+}
+
+impl Statement {
+    pub fn convert(self) -> Result<TopLevel, ConvertError> {
+        let mut stmt = self;
+        let mut context = Context::new();
+        let mut name_val = Vec::new();
+        while let Self::Let(let_stmt) = stmt {
+            let mut val = match let_stmt.args {
+                Some(args) => {
+                    todo!()
+                }
+                None => let_stmt.expr.convert(&mut context),
+            }?;
+            let name: Name = let_stmt.name.into();
+            val.name = val.name.or_else(|| Some(name.clone()));
+            context.push_variable(name.clone());
+            name_val.push((name, val));
+            stmt = *let_stmt.next;
         }
 
-        let goal = if lookahead.peek(Match) {
-            input.parse()?
-        } else {
-            return Err(lookahead.error());
+        let goal = match stmt {
+            Statement::Goal(goal) => TopLevel::Goal(goal.expr.convert(&mut context)?),
+            Statement::Let(_) => unreachable!(),
         };
 
-        Ok(Self { lets, goal })
+        Ok(name_val.into_iter().rfold(goal, |inner, (name, val)| {
+            TopLevel::Let(ast::Let {
+                name,
+                val,
+                inner: Box::new(inner),
+            })
+        }))
+    }
+}
+
+impl Parse for Statement {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut lookahead = input.lookahead1();
+
+        if lookahead.peek(Let) {
+            input.parse().map(Self::Let)
+        } else if lookahead.peek(Match) {
+            input.parse().map(Self::Goal)
+        } else {
+            Err(lookahead.error())
+        }
     }
 }
