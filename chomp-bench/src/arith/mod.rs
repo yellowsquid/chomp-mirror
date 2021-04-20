@@ -1,39 +1,51 @@
 use chewed::{ParseError, TakeError};
+use lalrpop_util::lalrpop_mod;
 
 pub mod nibble;
+lalrpop_mod!(pub lalr, "/arith/lalr.rs");
 
 pub fn take_number<P: chewed::Parser + ?Sized>(input: &mut P) -> Result<i64, TakeError> {
     let mut out = None;
     loop {
-        match input.next() {
+        match input.peek() {
             Some('0') => {
+                input.consume_str("0")?;
                 out = Some(out.unwrap_or_default() * 10);
             }
             Some('1') => {
+                input.consume_str("1")?;
                 out = Some(out.unwrap_or_default() * 10 + 1);
             }
             Some('2') => {
+                input.consume_str("2")?;
                 out = Some(out.unwrap_or_default() * 10 + 2);
             }
             Some('3') => {
+                input.consume_str("3")?;
                 out = Some(out.unwrap_or_default() * 10 + 3);
             }
             Some('4') => {
+                input.consume_str("4")?;
                 out = Some(out.unwrap_or_default() * 10 + 4);
             }
             Some('5') => {
+                input.consume_str("5")?;
                 out = Some(out.unwrap_or_default() * 10 + 5);
             }
             Some('6') => {
+                input.consume_str("6")?;
                 out = Some(out.unwrap_or_default() * 10 + 6);
             }
             Some('7') => {
+                input.consume_str("7")?;
                 out = Some(out.unwrap_or_default() * 10 + 7);
             }
             Some('8') => {
+                input.consume_str("8")?;
                 out = Some(out.unwrap_or_default() * 10 + 8);
             }
             Some('9') => {
+                input.consume_str("9")?;
                 out = Some(out.unwrap_or_default() * 10 + 9);
             }
             Some(c) => {
@@ -80,13 +92,15 @@ pub fn take_product<P: chewed::Parser + ?Sized>(input: &mut P) -> Result<i64, Ta
     let mut out = take_term(input)?;
     while let Some(c) = input.peek() {
         if c == '*' {
+            input.consume_str("*")?;
             input.skip_while(|c| c == ' ');
             out *= take_term(input)?;
         } else if c == '/' {
+            input.consume_str("/")?;
             input.skip_while(|c| c == ' ');
-            out -= take_term(input)?;
+            out /= take_term(input)?;
         } else {
-            return Err(TakeError::BadBranch(input.pos(), c, &['*', '/']));
+            break
         }
     }
     Ok(out)
@@ -96,13 +110,15 @@ pub fn take_expr<P: chewed::Parser + ?Sized>(input: &mut P) -> Result<i64, TakeE
     let mut out = take_product(input)?;
     while let Some(c) = input.peek() {
         if c == '+' {
+            input.consume_str("+")?;
             input.skip_while(|c| c == ' ');
             out += take_product(input)?;
         } else if c == '-' {
+            input.consume_str("-")?;
             input.skip_while(|c| c == ' ');
             out -= take_product(input)?;
         } else {
-            return Err(TakeError::BadBranch(input.pos(), c, &['+', '-']));
+            break
         }
     }
     Ok(out)

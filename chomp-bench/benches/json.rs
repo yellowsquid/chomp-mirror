@@ -1,8 +1,8 @@
 use chewed::{IterWrapper, Parser};
 use chomp_bench::json::*;
 use criterion::{
-    criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion,
-    PlotConfiguration, Throughput,
+    criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
+    Throughput,
 };
 
 const INPUTS: &[&str] = &[

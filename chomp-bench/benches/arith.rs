@@ -28,7 +28,12 @@ fn parse_handwritten(input: &str) -> i64 {
     parse_expr(&mut IterWrapper::new(input.chars())).unwrap()
 }
 
+fn parse_lalrpop(parser: &lalr::ExpressionParser, input: &str) -> i64 {
+    parser.parse(input).unwrap()
+}
+
 fn bench_parse(c: &mut Criterion) {
+    let lalr_parser = lalr::ExpressionParser::new();
     let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
     let mut group = c.benchmark_group("Arith");
     group.plot_config(plot_config);
@@ -39,6 +44,9 @@ fn bench_parse(c: &mut Criterion) {
         });
         group.bench_with_input(BenchmarkId::new("Handwritten", i), *input, |b, i| {
             b.iter(|| parse_handwritten(i))
+        });
+        group.bench_with_input(BenchmarkId::new("LALRPOP", i), *input, |b, i| {
+            b.iter(|| parse_lalrpop(&lalr_parser, i))
         });
     }
 }

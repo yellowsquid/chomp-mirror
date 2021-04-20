@@ -1,0 +1,33 @@
+use std::str::FromStr;
+
+grammar;
+
+pub Expression: i64 = {
+    <p : Product> <v : (<AddOp> <Product>)*> => {
+        v.into_iter().fold(p, |acc, (op, p)| if op { acc + p } else { acc - p })
+    }
+}
+
+AddOp: bool = {
+    "+" => true,
+    "-" => false,
+}
+
+Product: i64 = {
+    <t : Term> <v : (<MulOp> <Term>)*> => {
+        v.into_iter().fold(t, |acc, (op, t)| if op { acc * t } else { acc / t })
+    }
+}
+
+MulOp: bool = {
+    "*" => true,
+    "/" => false,
+}
+
+Term: i64 = {
+    Number,
+    "-" <Number> => -<>,
+    "(" <Expression> ")",
+}
+
+Number: i64 = r"[0-9]+" => i64::from_str(<>).unwrap();
