@@ -24,6 +24,10 @@ fn parse_chewed(input: &str) -> i64 {
         .into()
 }
 
+fn parse_handwritten(input: &str) -> i64 {
+    parse_expr(&mut IterWrapper::new(input.chars())).unwrap()
+}
+
 fn bench_parse(c: &mut Criterion) {
     let plot_config = PlotConfiguration::default().summary_scale(AxisScale::Logarithmic);
     let mut group = c.benchmark_group("Arith");
@@ -32,6 +36,9 @@ fn bench_parse(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(input.len() as u64));
         group.bench_with_input(BenchmarkId::new("Chewed", i), *input, |b, i| {
             b.iter(|| parse_chewed(i))
+        });
+        group.bench_with_input(BenchmarkId::new("Handwritten", i), *input, |b, i| {
+            b.iter(|| parse_handwritten(i))
         });
     }
 }
