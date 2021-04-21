@@ -50,7 +50,7 @@ pub struct Alt {
     pub first: Box<NamedExpression>,
     pub punct: Option<Span>,
     pub second: Box<NamedExpression>,
-    pub rest: Vec<(Option<Span>, NamedExpression)>
+    pub rest: Vec<(Option<Span>, NamedExpression)>,
 }
 
 impl Display for Alt {
@@ -69,10 +69,10 @@ impl PartialEq for Alt {
             && self.second == other.second
             && self.rest.len() == other.rest.len()
             && self
-            .rest
-            .iter()
-            .zip(other.rest.iter())
-            .all(|((_, me), (_, them))| me == them)
+                .rest
+                .iter()
+                .zip(other.rest.iter())
+                .all(|((_, me), (_, them))| me == them)
     }
 }
 
@@ -323,3 +323,11 @@ pub struct Function {
     pub expr: NamedExpression,
     pub span: Option<Span>,
 }
+
+impl PartialEq for Function {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.params == other.params && self.expr == other.expr
+    }
+}
+
+impl Eq for Function {}
