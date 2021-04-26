@@ -39,7 +39,11 @@ impl Context {
         res
     }
 
-    pub fn with_variables<I: IntoIterator<Item = Name>, F: FnOnce(&mut Self) -> R, R>(&mut self, names: I, f: F) -> R {
+    pub fn with_variables<I: IntoIterator<Item = Name>, F: FnOnce(&mut Self) -> R, R>(
+        &mut self,
+        names: I,
+        f: F,
+    ) -> R {
         let len = self.bindings.len();
         self.bindings.extend(names);
         let res = f(self);
@@ -286,17 +290,18 @@ impl Convert for Alt {
 impl Convert for Lambda {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
         let span = self.span();
-        let mut names = self.args.into_iter().map(Name::from);
+        let mut args: Vec<_> = self.args.into_iter().map(Name::from).collect();
         let expr = self.expr;
-        let inner = context.with_variables(names.clone(), |ctx| expr.convert(ctx))?;
-        let first = names.next().unwrap();
-        let rest = names.collect();
+        let inner = context.with_variables(args.clone(), |ctx| expr.convert(ctx))?;
         Ok(NamedExpression {
             name: None,
-            expr: ast::Lambda { first, rest, inner: Box::new(inner)}.into(),
+            expr: ast::Lambda {
+                args,
+                inner: Box::new(inner),
+            }
+            .into(),
             span,
         })
-
     }
 }
 

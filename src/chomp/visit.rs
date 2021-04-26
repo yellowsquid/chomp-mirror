@@ -1,9 +1,7 @@
 use proc_macro2::Span;
 
 use super::{
-    ast::{
-        Alt, Call, Cat, Epsilon, Expression, Fix, Literal, NamedExpression, Parameter, Variable,
-    },
+    ast::{Alt, Call, Cat, Epsilon, Expression, Fix, Lambda, Literal, NamedExpression, Variable},
     Name,
 };
 
@@ -36,14 +34,14 @@ pub trait Visitor {
         var: &Variable,
     ) -> Self::Out;
 
-    fn visit_parameter(
+    fn visit_call(&mut self, name: Option<&Name>, span: Option<Span>, call: &Call) -> Self::Out;
+
+    fn visit_lambda(
         &mut self,
         name: Option<&Name>,
         span: Option<Span>,
-        param: &Parameter,
+        lambda: &Lambda,
     ) -> Self::Out;
-
-    fn visit_call(&mut self, name: Option<&Name>, span: Option<Span>, call: &Call) -> Self::Out;
 }
 
 pub trait Mapper {
@@ -76,18 +74,18 @@ pub trait Mapper {
         var: &mut Variable,
     ) -> Self::Out;
 
-    fn map_parameter(
-        &mut self,
-        name: &mut Option<Name>,
-        span: Option<Span>,
-        param: &mut Parameter,
-    ) -> Self::Out;
-
     fn map_call(
         &mut self,
         name: &mut Option<Name>,
         span: Option<Span>,
         call: &mut Call,
+    ) -> Self::Out;
+
+    fn map_lambda(
+        &mut self,
+        name: &mut Option<Name>,
+        span: Option<Span>,
+        lambda: &mut Lambda,
     ) -> Self::Out;
 }
 
@@ -107,14 +105,9 @@ pub trait Folder {
     fn fold_variable(&mut self, name: Option<Name>, span: Option<Span>, var: Variable)
         -> Self::Out;
 
-    fn fold_parameter(
-        &mut self,
-        name: Option<Name>,
-        span: Option<Span>,
-        param: Parameter,
-    ) -> Self::Out;
-
     fn fold_call(&mut self, name: Option<Name>, span: Option<Span>, call: Call) -> Self::Out;
+
+    fn fold_lambda(&mut self, name: Option<Name>, span: Option<Span>, lambda: Lambda) -> Self::Out;
 }
 
 pub trait Visitable {
@@ -134,8 +127,8 @@ impl Visitable for NamedExpression {
             Expression::Alt(a) => visitor.visit_alt(self.name.as_ref(), self.span, a),
             Expression::Fix(f) => visitor.visit_fix(self.name.as_ref(), self.span, f),
             Expression::Variable(v) => visitor.visit_variable(self.name.as_ref(), self.span, v),
-            Expression::Parameter(p) => visitor.visit_parameter(self.name.as_ref(), self.span, p),
             Expression::Call(c) => visitor.visit_call(self.name.as_ref(), self.span, c),
+            Expression::Lambda(l) => visitor.visit_lambda(self.name.as_ref(), self.span, l),
         }
     }
 
@@ -147,8 +140,8 @@ impl Visitable for NamedExpression {
             Expression::Alt(a) => mapper.map_alt(&mut self.name, self.span, a),
             Expression::Fix(f) => mapper.map_fix(&mut self.name, self.span, f),
             Expression::Variable(v) => mapper.map_variable(&mut self.name, self.span, v),
-            Expression::Parameter(p) => mapper.map_parameter(&mut self.name, self.span, p),
             Expression::Call(c) => mapper.map_call(&mut self.name, self.span, c),
+            Expression::Lambda(l) => mapper.map_lambda(&mut self.name, self.span, l),
         }
     }
 
@@ -160,8 +153,8 @@ impl Visitable for NamedExpression {
             Expression::Alt(a) => folder.fold_alt(self.name, self.span, a),
             Expression::Fix(f) => folder.fold_fix(self.name, self.span, f),
             Expression::Variable(v) => folder.fold_variable(self.name, self.span, v),
-            Expression::Parameter(p) => folder.fold_parameter(self.name, self.span, p),
             Expression::Call(c) => folder.fold_call(self.name, self.span, c),
+            Expression::Lambda(l) => folder.fold_lambda(self.name, self.span, l),
         }
     }
 }

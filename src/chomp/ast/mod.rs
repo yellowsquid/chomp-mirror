@@ -116,16 +116,20 @@ impl Display for Call {
 /// A function abstraction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Lambda {
-    pub first: Name,
-    pub rest: Vec<Name>,
+    pub args: Vec<Name>,
     pub inner: Box<NamedExpression>,
 }
 
 impl Display for Lambda {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "/{}", self.first)?;
-        for name in self.rest {
-            write!(f, ", {}", name)?;
+        write!(f, "/")?;
+        let mut iter = self.args.iter();
+        if let Some(arg) = iter.next() {
+            write!(f, "{}", arg)?;
+
+            for arg in iter {
+                write!(f, ", {}", arg)?;
+            }
         }
         write!(f, "/ {}", self.inner)
     }
@@ -149,6 +153,16 @@ pub enum Expression {
     Call(Call),
     /// A function abstraction.
     Lambda(Lambda),
+}
+
+impl Expression {
+    pub fn try_into_lambda(self) -> Result<Lambda, Self> {
+        if let Self::Lambda(l) = self {
+            Ok(l)
+        } else {
+            Err(self)
+        }
+    }
 }
 
 impl Display for Expression {
@@ -297,23 +311,15 @@ impl PartialEq for NamedExpression {
 
 impl Eq for NamedExpression {}
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Let {
     pub name: Name,
     pub val: NamedExpression,
     pub inner: Box<TopLevel>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TopLevel {
     Let(Let),
     Goal(NamedExpression),
 }
-
-impl PartialEq for Function {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.params == other.params && self.expr == other.expr
-    }
-}
-
-impl Eq for Function {}

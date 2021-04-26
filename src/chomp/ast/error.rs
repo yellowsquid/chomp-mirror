@@ -1,68 +1,52 @@
+use super::{Expression, Lambda, NamedExpression};
+use proc_macro2::Span;
 use std::{
     error::Error,
     fmt::{self, Display},
 };
 
-use proc_macro2::Span;
-
-use crate::chomp::Name;
-
-use super::{Call, Parameter};
-
 #[derive(Debug)]
-pub enum SubstituteError {
-    FreeParameter {
-        param: Parameter,
+pub enum TranslateError {
+    CallNotAFunction {
+        on: Expression,
         span: Option<Span>,
-        name: Option<Name>,
     },
     WrongArgCount {
-        call: Call,
-        expected: usize,
+        lambda: Lambda,
+        args: Vec<NamedExpression>,
         span: Option<Span>,
     },
 }
 
-impl From<SubstituteError> for syn::Error {
-    fn from(e: SubstituteError) -> Self {
+impl From<TranslateError> for syn::Error {
+    fn from(e: TranslateError) -> Self {
         let msg = e.to_string();
         let span = match e {
-            SubstituteError::FreeParameter { span, .. }
-            | SubstituteError::WrongArgCount { span, .. } => span,
+            TranslateError::CallNotAFunction { span, .. }
+            | TranslateError::WrongArgCount { span, .. } => span,
         };
 
         Self::new(span.unwrap_or_else(Span::call_site), msg)
     }
 }
 
-impl Display for SubstituteError {
+impl Display for TranslateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::FreeParameter { param, name, .. } => {
-                if let Some(name) = name {
-                    write!(f, "unbound parameter: `{}`", name)
-                } else {
-                    write!(f, "unbound parameter: '{}", param.index)
-                }
+            Self::CallNotAFunction { .. } => {
+                write!(f, "call expected a function")
             }
-            Self::WrongArgCount { call, expected, .. } => {
-                if call.args.len() == 1 {
-                    write!(
-                        f,
-                        "this function takes {} arguments but 1 was supplied",
-                        expected
-                    )
-                } else {
-                    write!(
-                        f,
-                        "this function takes {} arguments but {} were supplied",
-                        expected,
-                        call.args.len()
-                    )
-                }
-            }
+            Self::WrongArgCount { lambda, args, .. } => match (lambda.args.len(), args.len()) {
+                (1, n) => write!(f, "this function takes 1 argument but {} were supplied", n),
+                (m, _) => write!(f, "this function takes {} arguments but 1 was supplied", m),
+                (m, n) => write!(
+                    f,
+                    "this function takes {} arguments but {} were supplied",
+                    m, n
+                ),
+            },
         }
     }
 }
 
-impl Error for SubstituteError {}
+impl Error for TranslateError {}

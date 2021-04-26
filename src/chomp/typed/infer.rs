@@ -1,16 +1,8 @@
 use proc_macro2::Span;
 
-use crate::chomp::{
-    ast::{Alt, Call, Cat, Epsilon, Fix, Literal, Parameter, Variable},
-    visit::{Folder, Visitable},
-    Name,
-};
+use crate::chomp::{Name, ast::{Alt, Call, Cat, Epsilon, Fix, Lambda, Literal, NamedExpression, Variable, substitute::Translate}, visit::{Folder, Visitable}};
 
-use super::{
-    context::Context,
-    error::{TypeError, VariableError},
-    Type, Typed, TypedExpression,
-};
+use super::{Type, Typed, TypedExpression, context::Context, error::{TypeError, VariableError}};
 
 #[derive(Debug)]
 pub struct TypeInfer<'a> {
@@ -38,13 +30,10 @@ impl Folder for TypeInfer<'_> {
 
     fn fold_cat(&mut self, name: Option<Name>, span: Option<Span>, cat: Cat) -> Self::Out {
         let first = cat.first.fold(self)?;
-        let second = cat.second;
         let rest = cat.rest;
-        let punct = cat.punct;
         self.context
             .with_unguard(|context| -> Result<TypedExpression, TypeError> {
                 let mut infer = TypeInfer { context };
-                let second = second.fold(&mut infer)?;
                 let rest = rest
                     .into_iter()
                     .map(|(punct, term)| -> Result<_, TypeError> {
@@ -52,7 +41,7 @@ impl Folder for TypeInfer<'_> {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(TypedExpression {
-                    inner: super::Cat::new(first, punct, second, rest)?.into(),
+                    inner: super::Cat::new(first, rest)?.into(),
                     name,
                     span,
                 })
@@ -61,15 +50,13 @@ impl Folder for TypeInfer<'_> {
 
     fn fold_alt(&mut self, name: Option<Name>, span: Option<Span>, alt: Alt) -> Self::Out {
         let first = alt.first.fold(self)?;
-        let second = alt.second.fold(self)?;
         let rest = alt
             .rest
             .into_iter()
             .map(|(punct, term)| -> Result<_, TypeError> { Ok((punct, term.fold(self)?)) })
             .collect::<Result<Vec<_>, _>>()?;
-        let punct = alt.punct;
         Ok(TypedExpression {
-            inner: super::Alt::new(first, punct, second, rest)?.into(),
+            inner: super::Alt::new(first, rest)?.into(),
             name,
             span,
         })
@@ -123,16 +110,18 @@ impl Folder for TypeInfer<'_> {
         })
     }
 
-    fn fold_parameter(
+    fn fold_call(&mut self, name: Option<Name>, span: Option<Span>, call: Call) -> Self::Out {
+        let translated = NamedExpression { name, expr: call.into(), span}.fold(&mut Translate::new())?;
+        let inner = translated.fold(self)?;
+        todo!()
+    }
+
+    fn fold_lambda(
         &mut self,
         _name: Option<Name>,
         _span: Option<Span>,
-        _param: Parameter,
+        _lambda: Lambda,
     ) -> Self::Out {
-        unimplemented!()
-    }
-
-    fn fold_call(&mut self, _name: Option<Name>, _span: Option<Span>, _call: Call) -> Self::Out {
         unimplemented!()
     }
 }

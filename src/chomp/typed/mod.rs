@@ -1,4 +1,4 @@
-use std::{hash, iter};
+use std::hash;
 
 use proc_macro2::Span;
 
@@ -125,16 +125,16 @@ pub struct Cat {
 impl Cat {
     fn new<I: IntoIterator<Item = (Option<Span>, TypedExpression)>>(
         first: TypedExpression,
-        punct: Option<Span>,
-        second: TypedExpression,
         rest: I,
     ) -> Result<Self, CatError> {
         if first.get_type().nullable() {
-            return Err(CatError::FirstNullable { expr: first, punct });
+            return Err(CatError::FirstNullable {
+                expr: first,
+                punct: todo!(),
+            });
         }
 
-        iter::once((punct, second))
-            .chain(rest)
+        rest.into_iter()
             .try_fold(
                 (first.get_type().clone(), vec![first]),
                 |(ty, mut terms), (punct, right)| {
@@ -178,12 +178,9 @@ pub struct Alt {
 impl Alt {
     pub fn new<I: IntoIterator<Item = (Option<Span>, TypedExpression)>>(
         first: TypedExpression,
-        punct: Option<Span>,
-        second: TypedExpression,
         rest: I,
     ) -> Result<Self, AltError> {
-        iter::once((punct, second))
-            .chain(rest)
+        rest.into_iter()
             .try_fold(
                 (first.get_type().clone(), vec![first]),
                 |(ty, mut terms), (punct, right)| {
@@ -248,6 +245,14 @@ impl Variable {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Call {
+    ty: Type,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Lambda {}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum RawTypedExpression {
     Epsilon(Epsilon),
     Literal(Literal),
@@ -255,6 +260,8 @@ enum RawTypedExpression {
     Alt(Alt),
     Fix(Fix),
     Variable(Variable),
+    Call(Call),
+    Lambda(Lambda),
 }
 
 impl From<Epsilon> for RawTypedExpression {
