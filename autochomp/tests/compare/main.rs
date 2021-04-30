@@ -2,7 +2,7 @@ use chewed::{IterWrapper, Parser};
 use chomp::{chomp::ast::{Function, NamedExpression}, nibble};
 
 fn chomp(input: &str) -> (Vec<Function>, NamedExpression) {
-    syn::parse_str::<nibble::cst::File>(&input).unwrap().convert().unwrap()
+    syn::parse_str::<nibble::File>(&input).unwrap().convert().unwrap()
 }
 
 fn autonibble(input: &str) -> (Vec<Function>, NamedExpression) {

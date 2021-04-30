@@ -15,7 +15,7 @@ use chomp::{
         visit::Visitable,
     },
     lower::RustBackend,
-    nibble::cst::File,
+    nibble::File,
 };
 
 fn main() {

@@ -9,7 +9,7 @@ use chomp::{
         visit::Visitable,
     },
     lower::RustBackend,
-    nibble::cst::File,
+    nibble::File,
 };
 use proc_macro::TokenStream;
 use syn::Error;

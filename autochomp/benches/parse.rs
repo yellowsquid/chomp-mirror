@@ -149,7 +149,7 @@ fn parse_autochomp(input: &str) -> Result<(Vec<Function>, NamedExpression), Box<
 }
 
 fn parse_chomp(input: &str) -> Result<(Vec<Function>, NamedExpression), Box<dyn Error>> {
-    syn::parse_str::<nibble::cst::File>(input)
+    syn::parse_str::<nibble::File>(input)
         .map_err(|e| Box::new(e) as Box<dyn Error>)
         .and_then(|file| file.convert().map_err(|e| Box::new(e) as Box<dyn Error>))
 }

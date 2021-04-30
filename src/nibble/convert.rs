@@ -8,7 +8,7 @@ use crate::chomp::{
     Name,
 };
 
-use super::cst::{Alt, Call, Cat, Fix, Ident, Labelled, ParenExpression, Term};
+use super::{Alt, Call, Cat, Fix, Ident, Labelled, ParenExpression, Term};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Binding {
