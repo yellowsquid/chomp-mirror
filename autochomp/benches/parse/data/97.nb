@@ -1,0 +1,3 @@
+let bot = !(/rec/ ("a" . rec));
+let zero = /zero suc/ zero;
+match (/zero suc/ suc (_ zero suc));

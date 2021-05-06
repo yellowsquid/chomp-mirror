@@ -21,15 +21,12 @@ impl FirstSet {
         self.inner.is_empty()
     }
 
-    pub fn union(mut self, mut other: Self) -> Self {
+    pub fn union(&mut self, mut other: Self) {
         self.inner.append(&mut other.inner);
-        self
     }
 
-    pub fn intersect(&self, other: &Self) -> Self {
-        Self {
-            inner: self.inner.intersection(&other.inner).copied().collect(),
-        }
+    pub fn disjoint(&self, other: &Self) -> bool {
+        self.inner.intersection(&other.inner).next().is_none()
     }
 }
 
@@ -57,26 +54,16 @@ impl FlastSet {
         self.inner.is_empty()
     }
 
-    pub fn union_first(mut self, mut other: FirstSet) -> Self {
+    pub fn union_first(&mut self, mut other: FirstSet) {
         self.inner.append(&mut other.inner);
-        self
     }
 
-    pub fn union(mut self, mut other: Self) -> Self {
+    pub fn union(&mut self, mut other: Self) {
         self.inner.append(&mut other.inner);
-        self
     }
 
-    pub fn intersect_first(&self, other: &FirstSet) -> Self {
-        Self {
-            inner: self.inner.intersection(&other.inner).copied().collect(),
-        }
-    }
-
-    pub fn intersect(&self, other: &Self) -> Self {
-        Self {
-            inner: self.inner.intersection(&other.inner).copied().collect(),
-        }
+    pub fn disjoint(&self, other: &FirstSet) -> bool {
+        self.inner.intersection(&other.inner).next().is_none()
     }
 }
 

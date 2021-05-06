@@ -1,25 +1,30 @@
 use super::{decode_pair, Value};
 
-use std::{collections::HashMap, convert::TryInto, ops::RangeInclusive};
+use std::{collections::HashMap, convert::TryInto, mem, ops::RangeInclusive};
 
 use chomp_macro::nibble;
 
 // Note: this is only an ASCII subset. Need to add character sets.
 nibble! {
-    let opt(x) = _ : None | x : Some;
-    let plus(x) = [rec](x . opt(rec));
-    let star(x) = [rec](opt(x . rec));
-    let sep(x, p) = [rec](x . opt(p . rec));
+    let opt  some = _ : None | some;
+    let plus iter = !(/rec/ iter . opt rec);
+    let star iter = !(/rec/ opt (iter . rec));
 
     let ws_char = " " | "\t" | "\n" | "\r";
-    let ws = star(ws_char);
-    let digit_1_9 = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
-    let digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+    let ws      = star ws_char;
 
-    let unsigned_number = (("0" | digit_1_9 . star(digit)) : Int)
-        . (opt("." . plus(digit)) : Frac)
-        . (opt(("e" | "E") . opt("+" | "-") . plus(digit)) : Exp);
-    let number = unsigned_number : Positive | "-" . unsigned_number : Negative;
+    let sep iter = !(/rec/ iter . opt ("," . ws . rec));
+
+    let digit_1_9 = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+    let digit     = "0" | digit_1_9;
+
+    let unsigned_number =
+          (("0" | digit_1_9 . star digit) : Int)
+        . (opt ("." . plus digit) : Frac)
+        . (opt (("e" | "E") . opt ("+" | "-") . plus digit) : Exp);
+    let number =
+          unsigned_number       : Positive
+        | "-" . unsigned_number : Negative;
 
     let hex =
         "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" |
@@ -37,38 +42,39 @@ nibble! {
          "`" | "a" | "b" | "c" | "d" | "e" | "f" | "g" |
          "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" |
          "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" |
-         "x" | "y" | "z" | "{" | "|" | "}" | "~") : Literal |
-    "\\" . (
-        ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t") : Ascii |
-        "u" . hex . hex . hex . hex : Unicode
-    ) : Escape;
+         "x" | "y" | "z" | "{" | "|" | "}" | "~"
+        ) : Literal |
+        "\\" . (
+            ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t") : Ascii |
+            "u" . hex . hex . hex . hex : Unicode
+        ) : Escape;
 
-    let string = "\"" . star(char) . "\"";
+    let string = "\"" . star char . "\"";
 
-    let member(value) = (string : Key) . ws . ":" . ws . (value : Value) . ws;
-    let object(value) = "{" . ws . opt(sep(member(value), "," . ws)) . "}";
+    let member value = (string : Key) . ws . ":" . ws . value . ws;
+    let object value = "{" . ws . opt (sep (member value)) . "}";
 
-    let array(value) = "[" . ws . opt(sep(value . ws, "," . ws)) . "]";
+    let array  value = "[" . ws . opt (sep (value . ws)) . "]";
 
-    let value = [value](
-        "true" : True |
-        "false" : False |
-        "null" : Null |
-        number : Number |
-        string : String |
-        object(value) : Object |
-        array(value) : Array
+    let value = !(/value/
+          "true"       : True
+        | "false"      : False
+        | "null"       : Null
+        | number       : Number
+        | string       : String
+        | object value : Object
+        | array value  : Array
     );
 
-    match [rec](ws_char . rec | value . ws);
+    match !(/rec/ ws_char . rec | value . ws);
 }
 
 impl From<Ast> for Value {
     fn from(mut ast: Ast) -> Self {
         loop {
-            match ast.0 {
-                Alt184::Branch1(cat) => ast = *cat.rec1,
-                Alt184::Branch2(cat) => return cat.value1.into(),
+            match ast {
+                Ast::Branch1(cat) => ast = *cat.rec1,
+                Ast::Branch2(cat) => return cat.value1.into(),
             }
         }
     }
@@ -76,14 +82,14 @@ impl From<Ast> for Value {
 
 impl From<Value1> for Value {
     fn from(value: Value1) -> Self {
-        match value.0 {
-            Alt182::Null1(_) => Self::Null,
-            Alt182::True1(_) => Self::Bool(true),
-            Alt182::False1(_) => Self::Bool(false),
-            Alt182::Number1(n) => Self::Number(n.into()),
-            Alt182::String1(s) => Self::String(s.into()),
-            Alt182::Object1(o) => Self::Object(o.into()),
-            Alt182::Array1(a) => Self::Array(a.into()),
+        match value {
+            Value1::Null1(_) => Self::Null,
+            Value1::True1(_) => Self::Bool(true),
+            Value1::False1(_) => Self::Bool(false),
+            Value1::Number1(n) => Self::Number(n.into()),
+            Value1::String1(s) => Self::String(s.into()),
+            Value1::Object1(o) => Self::Object(o.into()),
+            Value1::Array1(a) => Self::Array(a.into()),
         }
     }
 }
@@ -100,16 +106,16 @@ impl From<String1> for String {
     }
 }
 
-impl Iterator for Star2 {
+impl Iterator for Opt5 {
     type Item = char;
 
     fn next(&mut self) -> Option<Self::Item> {
-        fn next(star: &mut Star2) -> Option<Char1> {
-            match std::mem::replace(star, Star2(Opt5::None1(Epsilon))).0 {
+        fn next(star: &mut Opt5) -> Option<Char1> {
+            match std::mem::replace(star, Opt5::None1(Epsilon)) {
                 Opt5::None1(_) => None,
-                Opt5::Some1(s) => {
-                    *star = *s.rec1;
-                    Some(s.char1)
+                Opt5::Some1(some) => {
+                    *star = *some.rec1;
+                    Some(some.char1)
                 }
             }
         }
@@ -161,73 +167,102 @@ impl Iterator for Star2 {
 
 impl From<Object1> for HashMap<String, Value> {
     fn from(object: Object1) -> Self {
-        match object.opt1 {
-            Opt8::None1(_) => HashMap::new(),
-            Opt8::Sep1(s) => s
-                .into_iter()
-                .map(|m| (m.key1.into(), (*m.value1).into()))
-                .collect(),
+        object
+            .opt1
+            .into_iter()
+            .map(|m| (m.key1.into(), (*m.value1).into()))
+            .collect()
+    }
+}
+
+impl IntoIterator for Opt8 {
+    type Item = Member1;
+
+    type IntoIter = Opt7;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            Self::None1(_) => Opt7::None1(Epsilon),
+            Self::Sep1(sep) => Opt7::Some1(Some8 {
+                part1: Lit75,
+                ws1: Ws1::None1(Epsilon),
+                rec1: Box::new(sep),
+            }),
         }
     }
 }
 
-impl IntoIterator for Sep1 {
-    type Item = Member1;
-
-    type IntoIter = Sep1Iter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        Sep1Iter(Some(self))
-    }
-}
-
-pub struct Sep1Iter(Option<Sep1>);
-
-impl Iterator for Sep1Iter {
+impl Iterator for Opt7 {
     type Item = Member1;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let inner = self.0.take()?.0;
-        let res = inner.member1;
-        self.0 = match inner.opt1 {
+        let orig = mem::replace(self, Self::None1(Epsilon));
+        match orig {
             Opt7::None1(_) => None,
-            Opt7::Some1(s) => Some(*s.rec1),
-        };
-        Some(res)
+            Opt7::Some1(some) => {
+                *self = some.rec1.opt1;
+                Some(some.rec1.member1)
+            }
+        }
     }
 }
 
 impl From<Array1> for Vec<Value> {
     fn from(array: Array1) -> Self {
-        match array.opt1 {
-            Opt10::None1(_) => Vec::new(),
-            Opt10::Sep1(s) => s.into_iter().map(|x| (*x.value1).into()).collect(),
+        array.opt1.into_iter().map(Value::from).collect()
+    }
+}
+
+impl IntoIterator for Opt10 {
+    type Item = Value1;
+
+    type IntoIter = Opt9;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            Self::None1(_) => Opt9::None1(Epsilon),
+            Self::Sep1(sep) => Opt9::Some1(Some9 { part1: Lit75, ws1: Ws1::None1(Epsilon), rec1: Box::new(sep)})
         }
     }
 }
 
-impl IntoIterator for Sep2 {
-    type Item = X1;
-
-    type IntoIter = Sep2Iter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        Sep2Iter(Some(self))
-    }
-}
-
-pub struct Sep2Iter(Option<Sep2>);
-
-impl Iterator for Sep2Iter {
-    type Item = X1;
+impl Iterator for Opt9 {
+    type Item = Value1;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let inner = self.0.take()?.0;
-        let res = inner.x1;
-        self.0 = match inner.opt1 {
+        let orig = mem::replace(self, Self::None1(Epsilon));
+        match orig {
             Opt9::None1(_) => None,
-            Opt9::Some1(s) => Some(*s.rec1),
-        };
-        Some(res)
+            Opt9::Some1(some) => {
+                *self = some.rec1.opt1;
+                Some(*some.rec1.iter1.value1)
+            }
+        }
     }
 }
+
+// impl IntoIterator for Sep2 {
+//     type Item = X1;
+
+//     type IntoIter = Sep2Iter;
+
+//     fn into_iter(self) -> Self::IntoIter {
+//         Sep2Iter(Some(self))
+//     }
+// }
+
+// pub struct Sep2Iter(Option<Sep2>);
+
+// impl Iterator for Sep2Iter {
+//     type Item = X1;
+
+//     fn next(&mut self) -> Option<Self::Item> {
+//         let inner = self.0.take()?.0;
+//         let res = inner.x1;
+//         self.0 = match inner.opt1 {
+//             Opt9::None1(_) => None,
+//             Opt9::Some1(s) => Some(*s.rec1),
+//         };
+//         Some(res)
+//     }
+// }

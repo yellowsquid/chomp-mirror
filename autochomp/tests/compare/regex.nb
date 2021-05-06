@@ -1,5 +1,0 @@
-let opt(x) = _ | x;
-let plus(x) = [plus](x . opt(plus));
-let star(x) = [star](opt(x . star));
-
-match plus("a") . star("b");

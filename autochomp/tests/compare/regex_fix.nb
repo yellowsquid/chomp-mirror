@@ -1,4 +1,0 @@
-let opt(x) = _ | x;
-let ws = [star](opt(" " . star));
-
-match [rec]("a" . opt("." . ws . rec));

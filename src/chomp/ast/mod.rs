@@ -2,7 +2,7 @@ use std::fmt::{self, Display};
 
 use proc_macro2::Span;
 
-use super::Name;
+use super::name::Name;
 
 pub mod error;
 pub mod substitute;
@@ -15,7 +15,7 @@ pub type Literal = String;
 #[derive(Clone, Debug)]
 pub struct Cat {
     pub first: Box<NamedExpression>,
-    pub rest: Vec<(Option<Span>, NamedExpression)>,
+    pub rest: Vec<(Span, NamedExpression)>,
 }
 
 impl Display for Cat {
@@ -45,7 +45,7 @@ impl Eq for Cat {}
 #[derive(Clone, Debug)]
 pub struct Alt {
     pub first: Box<NamedExpression>,
-    pub rest: Vec<(Option<Span>, NamedExpression)>
+    pub rest: Vec<(Span, NamedExpression)>
 }
 
 impl Display for Alt {
@@ -105,7 +105,7 @@ impl Display for Call {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "({}", self.on)?;
 
-        for arg in self.args {
+        for arg in &self.args {
             write!(f, " {}", arg)?;
         }
 
@@ -135,7 +135,21 @@ impl Display for Lambda {
     }
 }
 
-#[derive(Clone, Debug)]
+/// A let statement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Let {
+    pub name: Name,
+    pub bound: Box<NamedExpression>,
+    pub body: Box<NamedExpression>,
+}
+
+impl Display for Let {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "let {} = {}; {}", self.name, self.bound, self.body)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expression {
     /// Matches the empty string.
     Epsilon(Epsilon),
@@ -153,6 +167,8 @@ pub enum Expression {
     Call(Call),
     /// A function abstraction.
     Lambda(Lambda),
+    /// A let statement
+    Let(Let),
 }
 
 impl Expression {
@@ -176,68 +192,10 @@ impl Display for Expression {
             Self::Variable(v) => v.fmt(f),
             Self::Lambda(p) => p.fmt(f),
             Self::Call(c) => c.fmt(f),
+            Self::Let(l) => l.fmt(f),
         }
     }
 }
-
-impl PartialEq for Expression {
-    fn eq(&self, other: &Self) -> bool {
-        match self {
-            Self::Epsilon(_) => matches!(other, Self::Epsilon(_)),
-            Self::Literal(l) => {
-                if let Self::Literal(them) = other {
-                    l == them
-                } else {
-                    false
-                }
-            }
-            Self::Cat(c) => {
-                if let Self::Cat(them) = other {
-                    c == them
-                } else {
-                    false
-                }
-            }
-            Self::Alt(a) => {
-                if let Self::Alt(them) = other {
-                    a == them
-                } else {
-                    false
-                }
-            }
-            Self::Fix(f) => {
-                if let Self::Fix(them) = other {
-                    f == them
-                } else {
-                    false
-                }
-            }
-            Self::Variable(v) => {
-                if let Self::Variable(them) = other {
-                    v == them
-                } else {
-                    false
-                }
-            }
-            Self::Lambda(p) => {
-                if let Self::Lambda(them) = other {
-                    p == them
-                } else {
-                    false
-                }
-            }
-            Self::Call(c) => {
-                if let Self::Call(them) = other {
-                    c == them
-                } else {
-                    false
-                }
-            }
-        }
-    }
-}
-
-impl Eq for Expression {}
 
 impl From<Epsilon> for Expression {
     fn from(eps: Epsilon) -> Self {
@@ -287,17 +245,29 @@ impl From<Call> for Expression {
     }
 }
 
+impl From<Let> for Expression {
+    fn from(stmt: Let) -> Self {
+        Self::Let(stmt)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct NamedExpression {
     pub name: Option<Name>,
+    pub span: Span,
     pub expr: Expression,
-    pub span: Option<Span>,
 }
 
 impl Display for NamedExpression {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.name {
-            Some(name) => write!(f, "({} : {})", self.expr, name),
+            Some(name) => {
+                if let Expression::Variable(_) = self.expr {
+                    write!(f, "{}", name)
+                } else {
+                    write!(f, "({} : {})", self.expr, name)
+                }
+            },
             None => self.expr.fmt(f),
         }
     }
@@ -310,16 +280,3 @@ impl PartialEq for NamedExpression {
 }
 
 impl Eq for NamedExpression {}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Let {
-    pub name: Name,
-    pub val: NamedExpression,
-    pub inner: Box<TopLevel>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum TopLevel {
-    Let(Let),
-    Goal(NamedExpression),
-}

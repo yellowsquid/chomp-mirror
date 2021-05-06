@@ -1,3 +1,0 @@
-let opt(x) = _ | x;
-let plus(x) = [rec](x . opt(rec));
-match "ba" . plus("a");

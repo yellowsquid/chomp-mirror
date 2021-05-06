@@ -1,0 +1,50 @@
+{
+  "cod": "200",
+  "message": 0,
+  "cnt": 40,
+  "list": [
+    {
+      "dt": 1612882800,
+      "main": {
+        "temp": 273.52,
+        "feels_like": 266.68,
+        "temp_min": 273.17,
+        "temp_max": 273.52,
+        "pressure": 1009,
+        "sea_level": 1009,
+        "grnd_level": 997,
+        "humidity": 81,
+        "temp_kf": 0.35
+      },
+      "weather": [
+        {
+          "id": 803,
+          "main": "Clouds",
+          "description": "broken clouds",
+          "icon": "04d"
+        }
+      ],
+      "clouds": {
+        "all": 67
+      },
+      "wind": {
+        "speed": 6.45,
+        "deg": 78
+      },
+      "visibility": 10000,
+      "pop": 0.12,
+      "sys": {
+        "pod": "d"
+      },
+      "dt_txt": "2021-02-09 15:00:00"
+    },
+    {
+      "dt": 161289360,
+      "main": {
+        "temp": 271,
+        "like": 264,
+        "min": 270
+      }
+    }
+  ]
+}

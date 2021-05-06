@@ -1,6 +1,6 @@
 use proc_macro2::Span;
 
-use crate::chomp::Name;
+use crate::chomp::name::Name;
 
 use super::{Alt, Cat, Epsilon, Fix, Literal, RawTypedExpression, TypedExpression, Variable};
 
@@ -8,19 +8,19 @@ pub trait Backend: Default {
     type Id;
     type Code;
 
-    fn gen_epsilon(&mut self, name: Option<Name>, span: Option<Span>, eps: Epsilon) -> Self::Id;
+    fn gen_epsilon(&mut self, name: Option<Name>, span: Span, eps: Epsilon) -> Self::Id;
 
-    fn gen_literal(&mut self, name: Option<Name>, span: Option<Span>, lit: Literal) -> Self::Id;
+    fn gen_literal(&mut self, name: Option<Name>, span: Span, lit: Literal) -> Self::Id;
 
-    fn gen_cat(&mut self, name: Option<Name>, span: Option<Span>, cat: Cat) -> Self::Id;
+    fn gen_cat(&mut self, name: Option<Name>, span: Span, cat: Cat) -> Self::Id;
 
-    fn gen_alt(&mut self, name: Option<Name>, span: Option<Span>, alt: Alt) -> Self::Id;
+    fn gen_alt(&mut self, name: Option<Name>, span: Span, alt: Alt) -> Self::Id;
 
-    fn gen_fix(&mut self, name: Option<Name>, span: Option<Span>, fix: Fix) -> Self::Id;
+    fn gen_fix(&mut self, name: Option<Name>, span: Span, fix: Fix) -> Self::Id;
 
-    fn gen_variable(&mut self, name: Option<Name>, span: Option<Span>, var: Variable) -> Self::Id;
+    fn gen_variable(&mut self, name: Option<Name>, span: Span, var: Variable) -> Self::Id;
 
-    fn emit_code(self, name: Option<Name>, span: Option<Span>, id: Self::Id) -> Self::Code;
+    fn emit_code(self, name: Option<Name>, span: Span, id: Self::Id) -> Self::Code;
 }
 
 pub trait GenerateCode {

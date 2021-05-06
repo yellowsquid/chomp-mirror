@@ -30,16 +30,11 @@ impl Context {
             .nth_back(var.index)
             .ok_or(GetVariableError::FreeVariable)
             .and_then(|ty| {
-                self.unguard_points
-                    .last()
-                    .and_then(|point| {
-                        if point + var.index >= self.vars.len() {
-                            Some(ty)
-                        } else {
-                            None
-                        }
-                    })
-                    .ok_or(GetVariableError::GuardedVariable)
+                if self.unguard_points.last().unwrap_or(&0) + var.index >= self.vars.len() {
+                    Ok(ty)
+                } else {
+                    Err(GetVariableError::GuardedVariable)
+                }
             })
     }
 

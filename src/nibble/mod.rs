@@ -2,20 +2,16 @@ pub mod convert;
 
 use std::fmt;
 
-use proc_macro2::Span;
+use proc_macro2::TokenStream;
+use quote::{ToTokens, TokenStreamExt};
 use syn::{
-    bracketed,
     ext::IdentExt,
     parenthesized,
     parse::{Parse, ParseStream},
-    punctuated::{Pair, Punctuated},
-    token::{Bracket, Comma, Let, Match, Paren},
+    punctuated::Punctuated,
+    token::{Let, Match, Paren},
     LitStr, Token,
 };
-
-use crate::chomp::{Name, ast::{self, TopLevel}};
-
-use convert::{Context, Convert, ConvertError};
 
 pub type Epsilon = Token![_];
 
@@ -24,60 +20,15 @@ pub type Ident = syn::Ident;
 pub type Literal = LitStr;
 
 #[derive(Clone)]
-pub struct ArgList<T> {
-    paren_token: Paren,
-    args: Punctuated<T, Comma>,
-}
-
-impl<T> ArgList<T> {
-    pub fn span(&self) -> Span {
-        self.paren_token.span
-    }
-
-    pub fn len(&self) -> usize {
-        self.args.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.args.is_empty()
-    }
-}
-
-impl<T> IntoIterator for ArgList<T> {
-    type Item = T;
-
-    type IntoIter = <Punctuated<T, Comma> as IntoIterator>::IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.args.into_iter()
-    }
-}
-
-impl<T: Parse> Parse for ArgList<T> {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let args;
-        let paren_token = parenthesized!(args in input);
-        let args = args.call(Punctuated::parse_terminated)?;
-        Ok(Self { paren_token, args })
-    }
-}
-
-impl<T: fmt::Debug> fmt::Debug for ArgList<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ArgList")?;
-        f.debug_list().entries(self.args.iter()).finish()
-    }
-}
-
-#[derive(Clone)]
 pub struct Fix {
     bang_token: Token![!],
     pub expr: Box<Term>,
 }
 
-impl Fix {
-    pub fn span(&self) -> Option<Span> {
-        self.bang_token.span.join(self.expr.span()?)
+impl ToTokens for Fix {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.bang_token.to_tokens(tokens);
+        self.expr.to_tokens(tokens);
     }
 }
 
@@ -99,6 +50,12 @@ impl fmt::Debug for Fix {
 pub struct ParenExpression {
     paren_token: Paren,
     pub expr: Expression,
+}
+
+impl ToTokens for ParenExpression {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.paren_token.surround(tokens, |tokens| self.expr.to_tokens(tokens))
+    }
 }
 
 impl Parse for ParenExpression {
@@ -127,14 +84,14 @@ pub enum Term {
     Parens(ParenExpression),
 }
 
-impl Term {
-    pub fn span(&self) -> Option<Span> {
+impl ToTokens for Term {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
         match self {
-            Self::Epsilon(e) => Some(e.span),
-            Self::Ident(i) => Some(i.span()),
-            Self::Literal(l) => Some(l.span()),
-            Self::Fix(f) => f.span(),
-            Self::Parens(p) => Some(p.paren_token.span),
+            Self::Epsilon(e) => e.to_tokens(tokens),
+            Self::Ident(i) => i.to_tokens(tokens),
+            Self::Literal(l) => l.to_tokens(tokens),
+            Self::Fix(f) => f.to_tokens(tokens),
+            Self::Parens(p) => p.to_tokens(tokens),
         }
     }
 }
@@ -174,18 +131,15 @@ impl fmt::Debug for Term {
 #[derive(Clone, Debug)]
 pub struct Call(pub Vec<Term>);
 
-impl Call {
-    pub fn span(&self) -> Option<Span> {
-        let mut iter = self.0.iter();
-        let first = iter.next()?.span()?;
-        iter.try_fold(first, |span, t| t.span().and_then(|s| span.join(s)))
+impl ToTokens for Call {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.append_all(&self.0)
     }
 }
 
 impl Parse for Call {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut out = Vec::new();
-        out.push(input.parse()?);
+        let mut out = vec![input.parse()?];
         loop {
             let lookahead = input.lookahead1();
             if lookahead.peek(Token![_])
@@ -207,34 +161,22 @@ impl Parse for Call {
 #[derive(Clone)]
 pub struct Cat(pub Punctuated<Call, Token![.]>);
 
+impl ToTokens for Cat {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.0.to_tokens(tokens)
+    }
+}
+
 impl Parse for Cat {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         input.call(Punctuated::parse_separated_nonempty).map(Self)
     }
 }
 
-impl Cat {
-    pub fn span(&self) -> Option<Span> {
-        let mut iter = self.0.pairs();
-        let span = match iter.next()? {
-            Pair::Punctuated(t, p) => t.span().and_then(|s| s.join(p.span)),
-            Pair::End(t) => t.span(),
-        }?;
-
-        iter.try_fold(span, |span, pair| match pair {
-            Pair::Punctuated(t, p) => t
-                .span()
-                .and_then(|s| span.join(s))
-                .and_then(|s| s.join(p.span)),
-            Pair::End(t) => t.span().and_then(|s| span.join(s)),
-        })
-    }
-}
-
 impl fmt::Debug for Cat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Cat")?;
-        f.debug_list().entries(self.0.iter()).finish()
+        f.debug_list().entries(&self.0).finish()
     }
 }
 
@@ -244,9 +186,10 @@ pub struct Label {
     pub label: Ident,
 }
 
-impl Label {
-    pub fn span(&self) -> Option<Span> {
-        self.colon_tok.span.join(self.label.span())
+impl ToTokens for Label {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.colon_tok.to_tokens(tokens);
+        self.label.to_tokens(tokens);
     }
 }
 
@@ -270,13 +213,12 @@ pub struct Labelled {
     pub label: Option<Label>,
 }
 
-impl Labelled {
-    pub fn span(&self) -> Option<Span> {
-        self.cat.span().and_then(|s| {
-            self.label
-                .as_ref()
-                .and_then(|l| l.span().and_then(|t| s.join(t)))
-        })
+impl ToTokens for Labelled {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.cat.to_tokens(tokens);
+        if let Some(label) = &self.label {
+            label.to_tokens(tokens);
+        }
     }
 }
 
@@ -295,21 +237,9 @@ impl Parse for Labelled {
 #[derive(Clone)]
 pub struct Alt(pub Punctuated<Labelled, Token![|]>);
 
-impl Alt {
-    pub fn span(&self) -> Option<Span> {
-        let mut iter = self.0.pairs();
-        let span = match iter.next()? {
-            Pair::Punctuated(t, p) => t.span().and_then(|s| s.join(p.span)),
-            Pair::End(t) => t.span(),
-        }?;
-
-        iter.try_fold(span, |span, pair| match pair {
-            Pair::Punctuated(t, p) => t
-                .span()
-                .and_then(|s| span.join(s))
-                .and_then(|s| s.join(p.span)),
-            Pair::End(t) => t.span().and_then(|s| span.join(s)),
-        })
+impl ToTokens for Alt {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.0.to_tokens(tokens)
     }
 }
 
@@ -322,27 +252,40 @@ impl Parse for Alt {
 impl fmt::Debug for Alt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Alt")?;
-        f.debug_list().entries(self.0.iter()).finish()
+        f.debug_list().entries(&self.0).finish()
     }
 }
 #[derive(Clone)]
 pub struct Lambda {
     slash_tok_left: Token![/],
-    pub args: ArgList<Ident>,
+    pub args: Vec<Ident>,
     slash_tok_right: Token![/],
     pub expr: Alt,
 }
 
-impl Lambda {
-    pub fn span(&self) -> Option<Span> {
-        self.slash_tok_left.span.join(self.expr.span()?)
+impl ToTokens for Lambda {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.slash_tok_left.to_tokens(tokens);
+        tokens.append_all(&self.args);
+        self.slash_tok_right.to_tokens(tokens);
+        self.expr.to_tokens(tokens);
     }
 }
 
 impl Parse for Lambda {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let slash_tok_left = input.parse()?;
-        let args = input.parse()?;
+        let mut args = Vec::new();
+        loop {
+            args.push(input.parse()?);
+            let lookahead = input.lookahead1();
+
+            if lookahead.peek(Token![/]) {
+                break;
+            } else if !lookahead.peek(Ident::peek_any) {
+                return Err(lookahead.error());
+            }
+        }
         let slash_tok_right = input.parse()?;
         let expr = input.parse()?;
         Ok(Self {
@@ -369,6 +312,15 @@ pub enum Expression {
     Lambda(Lambda),
 }
 
+impl ToTokens for Expression {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
+            Self::Alt(a) => a.to_tokens(tokens),
+            Self::Lambda(l) => l.to_tokens(tokens),
+        }
+    }
+}
+
 impl Parse for Expression {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         if input.peek(Token![/]) {
@@ -384,6 +336,14 @@ pub struct GoalStatement {
     match_token: Token![match],
     expr: Expression,
     semi_token: Token![;],
+}
+
+impl ToTokens for GoalStatement {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.match_token.to_tokens(tokens);
+        self.expr.to_tokens(tokens);
+        self.semi_token.to_tokens(tokens);
+    }
 }
 
 impl Parse for GoalStatement {
@@ -412,22 +372,40 @@ impl fmt::Debug for GoalStatement {
 pub struct LetStatement {
     let_token: Token![let],
     name: Ident,
-    args: Option<ArgList<Ident>>,
+    args: Vec<Ident>,
     eq_token: Token![=],
     expr: Expression,
     semi_token: Token![;],
     next: Box<Statement>,
 }
 
+impl ToTokens for LetStatement {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.let_token.to_tokens(tokens);
+        self.name.to_tokens(tokens);
+        tokens.append_all(&self.args);
+        self.eq_token.to_tokens(tokens);
+        self.expr.to_tokens(tokens);
+        self.semi_token.to_tokens(tokens);
+        self.next.to_tokens(tokens);
+    }
+}
+
 impl Parse for LetStatement {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let let_token = input.parse()?;
         let name = input.call(Ident::parse_any)?;
-        let args = if input.peek(Paren) {
-            Some(input.parse()?)
-        } else {
-            None
-        };
+        let mut args = Vec::new();
+        loop {
+            let lookahead = input.lookahead1();
+            if lookahead.peek(Token![=]) {
+                break;
+            } else if lookahead.peek(Ident::peek_any) {
+                args.push(input.parse()?);
+            } else {
+                return Err(lookahead.error());
+            }
+        }
         let eq_token = input.parse()?;
         let expr = input.parse()?;
         let semi_token = input.parse()?;
@@ -462,43 +440,18 @@ pub enum Statement {
     Let(LetStatement),
 }
 
-impl Statement {
-    pub fn convert(self) -> Result<TopLevel, ConvertError> {
-        let mut stmt = self;
-        let mut context = Context::new();
-        let mut name_val = Vec::new();
-        while let Self::Let(let_stmt) = stmt {
-            let mut val = match let_stmt.args {
-                Some(args) => {
-                    todo!()
-                }
-                None => let_stmt.expr.convert(&mut context),
-            }?;
-            let name: Name = let_stmt.name.into();
-            val.name = val.name.or_else(|| Some(name.clone()));
-            context.push_variable(name.clone());
-            name_val.push((name, val));
-            stmt = *let_stmt.next;
+impl ToTokens for Statement {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
+            Self::Goal(g) => g.to_tokens(tokens),
+            Self::Let(l) => l.to_tokens(tokens),
         }
-
-        let goal = match stmt {
-            Statement::Goal(goal) => TopLevel::Goal(goal.expr.convert(&mut context)?),
-            Statement::Let(_) => unreachable!(),
-        };
-
-        Ok(name_val.into_iter().rfold(goal, |inner, (name, val)| {
-            TopLevel::Let(ast::Let {
-                name,
-                val,
-                inner: Box::new(inner),
-            })
-        }))
     }
 }
 
 impl Parse for Statement {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut lookahead = input.lookahead1();
+        let lookahead = input.lookahead1();
 
         if lookahead.peek(Let) {
             input.parse().map(Self::Let)

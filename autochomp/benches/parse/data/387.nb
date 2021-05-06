@@ -1,0 +1,13 @@
+let bot = !(/rec/ "a" . rec);
+let zero = /zero suc/ zero;
+let suc n = /zero suc/ suc (n zero suc);
+
+let opt  some = _ : None | some;
+let plus iter = !(/plus/ iter . (opt plus));
+let star iter = opt (plus iter);
+
+let up_to x n = n bot (/rec/ x . opt rec);
+
+let Pattern_Whitespace = "\t"|"\n"|"\x0B"|"\x0c"|"\r"|" "|"\u{85}"|"\u{200e}"|"\u{200f}"|"\u{2028}"|"\u{2029}";
+
+match = "0" |"1";

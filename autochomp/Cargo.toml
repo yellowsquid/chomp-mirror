@@ -6,13 +6,13 @@ edition = "2018"
 
 [dev-dependencies]
 criterion = "0.3.3"
-proc-macro2 = "1.0.24"
 syn = "1.0.58"
 
 [dependencies]
 chewed = {path = "../chewed"}
 chomp = {path = "../"}
 chomp-macro = {path = "../chomp-macro"}
+proc-macro2 = "1.0.24"
 
 [[bench]]
 name = "parse"

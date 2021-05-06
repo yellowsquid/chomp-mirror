@@ -5,25 +5,17 @@ use std::{
 
 use proc_macro2::Span;
 
-use crate::chomp::{ast::Variable, Name};
+use crate::chomp::{name::Name, ast::{Call, Fix, Lambda, Let, Variable}};
 
-use super::{context::GetVariableError, TypedExpression};
+use super::{Type, TypedExpression, context::GetVariableError};
 
 /// A type error when using a fix point variable.
 #[derive(Debug)]
 pub struct VariableError {
     pub inner: GetVariableError,
     pub var: Variable,
-    pub span: Option<Span>,
+    pub span: Span,
     pub name: Option<Name>,
-}
-
-impl From<VariableError> for syn::Error {
-    fn from(other: VariableError) -> Self {
-        let msg = other.to_string();
-        let span = other.span;
-        Self::new(span.unwrap_or_else(Span::call_site), msg)
-    }
 }
 
 impl Display for VariableError {
@@ -47,24 +39,20 @@ impl Error for VariableError {}
 pub enum CatError {
     FirstNullable {
         expr: TypedExpression,
-        punct: Option<Span>,
+        punct: Span,
     },
     FirstFlastOverlap {
-        first: Vec<TypedExpression>,
-        punct: Option<Span>,
+        front_ty: Type,
+        punct: Span,
         next: TypedExpression,
     },
 }
 
-impl From<CatError> for syn::Error {
-    fn from(other: CatError) -> Self {
-        let msg = other.to_string();
-        let span = match other {
-            CatError::FirstNullable { punct, .. } | CatError::FirstFlastOverlap { punct, .. } => {
-                punct
-            }
-        };
-        Self::new(span.unwrap_or_else(Span::call_site), msg)
+impl CatError {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::FirstNullable { punct, .. } | Self::FirstFlastOverlap { punct, .. } => *punct,
+        }
     }
 }
 
@@ -84,24 +72,22 @@ impl Error for CatError {}
 #[derive(Debug)]
 pub enum AltError {
     BothNullable {
-        left: Vec<TypedExpression>,
-        punct: Option<Span>,
+        left_ty: Type,
+        punct: Span,
         right: TypedExpression,
     },
     FirstOverlap {
-        left: Vec<TypedExpression>,
-        punct: Option<Span>,
+        left_ty: Type,
+        punct: Span,
         right: TypedExpression,
     },
 }
 
-impl From<AltError> for syn::Error {
-    fn from(other: AltError) -> Self {
-        let msg = other.to_string();
-        let span = match other {
-            AltError::BothNullable { punct, .. } | AltError::FirstOverlap { punct, .. } => punct,
-        };
-        Self::new(span.unwrap_or_else(Span::call_site), msg)
+impl AltError {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::BothNullable { punct, .. } | Self::FirstOverlap { punct, .. } => *punct,
+        }
     }
 }
 
@@ -121,6 +107,24 @@ pub enum TypeError {
     Cat(CatError),
     Alt(AltError),
     Variable(VariableError),
+    UnexpectedCall { span: Span, call: Call },
+    UnexpectedLambda { span: Span, lambda: Lambda },
+    UnexpectedLet { span: Span, stmt: Let },
+    ExpectedLambda {span: Span, fix: Fix },
+}
+
+impl TypeError {
+    pub fn span(&self) -> Span {
+        match self {
+            TypeError::Cat(c) => c.span(),
+            TypeError::Alt(a) => a.span(),
+            TypeError::Variable(v) => v.span,
+            TypeError::UnexpectedCall { span, .. }
+            | TypeError::UnexpectedLambda { span, .. }
+            | TypeError::UnexpectedLet { span, .. }
+            | TypeError::ExpectedLambda { span, .. } => *span,
+        }
+    }
 }
 
 impl From<CatError> for TypeError {
@@ -143,11 +147,9 @@ impl From<VariableError> for TypeError {
 
 impl From<TypeError> for syn::Error {
     fn from(other: TypeError) -> Self {
-        match other {
-            TypeError::Cat(e) => e.into(),
-            TypeError::Alt(e) => e.into(),
-            TypeError::Variable(e) => e.into(),
-        }
+        let span = other.span();
+        let msg = format!("{}", other);
+        Self::new(span, msg)
     }
 }
 
@@ -157,6 +159,19 @@ impl Display for TypeError {
             Self::Cat(e) => e.fmt(f),
             Self::Alt(e) => e.fmt(f),
             Self::Variable(e) => e.fmt(f),
+
+            Self::UnexpectedCall { .. } => {
+                write!(f, "unexpected call")
+            }
+            Self::UnexpectedLambda { .. } => {
+                write!(f, "unexpected lambda")
+            }
+            Self::UnexpectedLet { .. } => {
+                write!(f, "unexpected let")
+            }
+            Self::ExpectedLambda { .. } => {
+                write!(f, "expected a lambda expression")
+            }
         }
     }
 }

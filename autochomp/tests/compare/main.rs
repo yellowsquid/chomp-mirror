@@ -1,26 +1,39 @@
 use chewed::{IterWrapper, Parser};
-use chomp::{chomp::ast::{Function, NamedExpression}, nibble};
+use chomp::{
+    chomp::ast::NamedExpression,
+    nibble::{
+        self,
+        convert::{Context, Convert},
+    },
+};
 
-fn chomp(input: &str) -> (Vec<Function>, NamedExpression) {
-    syn::parse_str::<nibble::File>(&input).unwrap().convert().unwrap()
+fn chomp(input: &str) -> NamedExpression {
+    syn::parse_str::<nibble::Statement>(&input)
+        .unwrap()
+        .convert(&mut Context::default())
+        .unwrap()
 }
 
-fn autonibble(input: &str) -> (Vec<Function>, NamedExpression) {
-    IterWrapper::new(input.chars()).parse::<autochomp::Ast>().unwrap().convert().unwrap()
+fn autonibble(input: &str) -> NamedExpression {
+    IterWrapper::new(input.chars())
+        .parse::<autochomp::Ast>()
+        .unwrap()
+        .convert(&mut Context::default())
+        .unwrap()
 }
 
 macro_rules! compare {
-	  ($name:ident, $file:literal) => {
-		    #[test]
+    ($name:ident, $file:literal) => {
+        #[test]
         fn $name() {
             let input = include_str!($file);
             assert_eq!(chomp(input), autonibble(input))
         }
-	  };
+    };
 }
 
-compare!(compare_sheep, "sheep.nb");
-compare!(compare_ratata, "ratata.nb");
-compare!(compare_regex, "regex.nb");
-compare!(compare_regex_fix, "regex_fix.nb");
-compare!(compare_nibble, "nibble_exp.nb");
+compare!(compare_sheep, "nibble/sheep.nb");
+compare!(compare_ratata, "nibble/ratata.nb");
+compare!(compare_regex, "nibble/regex.nb");
+compare!(compare_regex_fix, "nibble/regex_fix.nb");
+compare!(compare_nibble, "nibble/nibble_exp.nb");

@@ -1,18 +1,25 @@
-use std::convert::TryInto;
+use std::{convert::TryInto, mem};
 
 use chomp::{
     chomp::{
-        ast::{self, Alt, Call, Cat, Fix, Function, NamedExpression, Parameter, Variable},
-        Name,
+        ast::{self, Alt, Call, Cat, Fix, Lambda, Let, Literal, NamedExpression, Variable},
+        name::{Content, Name},
     },
-    nibble::convert::{Binding, Context, Convert, ConvertError},
+    nibble::convert::{Context, Convert, ConvertError},
 };
+use chomp_macro::nibble;
+use proc_macro2::Span;
 
-chomp_macro::nibble! {
-    let opt(x) = _ : None | x : Some;
-    let plus(x) = [plus]((x : First) . (opt(plus) : Next));
-    let star(x) = opt(plus(x));
-    let star_(base, step) = [rec](base : Base | step . rec : Step);
+nibble! {
+    let bot = !(/rec/ "a" . rec);
+    let zero = /zero suc/ zero;
+    let suc n = /zero suc/ suc (n zero suc);
+
+    let opt  some = _ : None | some;
+    let plus iter = !(/plus/ iter . (opt plus));
+    let star iter = opt (plus iter);
+
+    let up_to x n = n bot (/rec/ x . opt rec);
 
     let Pattern_Whitespace = "\t"|"\n"|"\x0B"|"\x0c"|"\r"|" "|"\u{85}"|"\u{200e}"|"\u{200f}"|"\u{2028}"|"\u{2029}";
 
@@ -25,9 +32,6 @@ chomp_macro::nibble! {
     let XID_Start =
         "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" |
         "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" |
-
-
-
         "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" |
         "y" | "z" |
         "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" |
@@ -52,96 +56,146 @@ chomp_macro::nibble! {
          "x" | "y" | "z" | "{" | "|" | "}" | "~") : Literal |
         "\\" . (
             ("\"" | "'" | "n" | "r" | "t" | "\\" | "0") : Ascii |
-            "x" . oct_digit . hex_digit : Oct |
-            "u{" .hex_digit
-                 .opt(hex_digit
-                     .opt(hex_digit
-                         .opt(hex_digit
-                             .opt(hex_digit . opt(hex_digit))))) . "}" : Unicode
+            "x"  . oct_digit . hex_digit : Oct |
+            "u{" . up_to hex_digit (suc (suc (suc (suc (suc (suc zero)))))) . "}" : Unicode
         ) : Escape ;
 
-    let ws = plus(Pattern_Whitespace);
+    let ws = plus Pattern_Whitespace;
+    let ows = opt ws;
 
-    let punctuated(x, p) = [rec]((x : First) . (opt(p . opt(ws) . rec) : Next));
-    let list(x) = "(" . opt(ws) . [rec]((x : First) . (opt("," . opt(ws) . opt(rec)) : Next)) . ")";
+    let list inner = !(/list/ inner . opt (ws . opt list));
+    let separated inner sep = !(/separated/ inner . opt (sep . ows . separated));
 
     let epsilon = "_";
-    let ident = XID_Start . star(XID_Continue);
-    let literal = "\"" . (plus(literal_char) : Contents) . "\"";
-    let parens(expr) = "(" . opt(ws) . (expr : Inner) . ")";
-    let fix(expr) = "[" . opt(ws) . (ident : Arg) . opt(ws) . "]" . opt(ws) . (parens(expr) : Inner);
+    let ident = XID_Start . star XID_Continue;
+    let literal = "\"" . (plus literal_char : Contents) . "\"";
+    let fix term = "!" . ows . term;
+    let parens expr = "(" . ows . expr . ")";
 
-    let term(expr) =
-          epsilon . opt(ws) : Epsilon
-        | literal . opt(ws) : Literal
-        | parens(expr) . opt(ws) : Parens
-        | fix(expr) . opt(ws) : Fix
-        | ident . opt(ws) . opt(list(expr) . opt(ws)) : CallOrVariable
-        ;
+    let names = list ident;
 
-    let label = ":" . opt(ws) . (ident : Label) . opt(ws);
-    let cat(expr) = punctuated(term(expr), ".");
-    let alt(expr) = punctuated((cat(expr) : Cat) . (opt(label) : Name), "|");
-    let expr = [expr](alt(expr));
-    let let = "let" . ws . (ident : Name) . opt(ws) . (opt(list(ident . opt(ws)) . opt(ws)) : Args) . "=" . opt(ws) . (expr : Expr) . ";" . opt(ws);
-    let goal = "match" . ws . (expr : Expr) . ";" . opt(ws);
+    let term expr = !(/term/
+          epsilon : Epsilon
+        | literal : Literal
+        | parens expr : Parens
+        | fix term : Fix
+        | ident : Variable
+        );
 
-    match star_(star_(goal : Goal, let : Let), Pattern_Whitespace);
+    let label = ":" . ows . ident . ows;
+
+    let call   expr = list (term expr);
+    let cat    expr = separated (call expr) ".";
+    let alt    expr = separated (cat expr . opt label : Labelled) "|";
+    let lambda expr = "/" . ows . names . "/" . ows . alt expr;
+    let expr = !(/expr/ alt expr | lambda expr);
+    let goal = "match" . ws . expr . ";" . ows;
+    let let stmt = "let" . ws . names . "=" . ows . expr . ";" . ows . stmt;
+    let stmt = !(/stmt/ let stmt | goal);
+    match !(/skip/ Pattern_Whitespace . skip | stmt);
 }
 
-impl Ast {
-    pub fn convert(self) -> Result<(Vec<Function>, NamedExpression), ConvertError> {
-        let content = Star2::from(self.0);
-        let mut names = Vec::new();
-        let mut map = Vec::new();
+impl Convert for Ast {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
+        let mut inner = self;
 
-        let mut iter = content.into_iter();
-
-        for stmt in &mut iter {
-            let name: Name = stmt.name1.into();
-            let params = Option::from(stmt.args1)
-                .into_iter()
-                .flat_map(List2::into_iter)
-                .map(Name::from);
-            let mut context = Context::new(&names, params.clone());
-            let mut expr = stmt.expr1.convert(&mut context)?;
-            names.push(name.clone());
-            expr.name = Some(name.clone());
-            map.push(Function {
-                name,
-                params: params.map(Some).collect(),
-                expr,
-                span: None,
-            });
+        while let Ast::Branch1(cat) = inner {
+            inner = *cat.skip1;
         }
 
-        let mut context = Context::new(&names, Vec::new());
-        let goal = iter.consume().expr1.convert(&mut context)?;
+        match inner {
+            Ast::Branch1(_) => unreachable!(),
+            Ast::Stmt1(stmt) => stmt.convert(context),
+        }
+    }
+}
 
-        Ok((map, goal))
+impl Convert for Stmt1 {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
+        match self {
+            Stmt1::Goal1(goal) => goal.expr1.convert(context),
+            Stmt1::Let1(stmt) => {
+                let mut names = stmt.names1.into_iter().peekable();
+                let name = Name::new_let(names.next().unwrap());
+                let bound = if names.peek().is_none() {
+                    stmt.expr1.convert(context)?
+                } else {
+                    let args: Vec<Name> = names.map(Name::new_variable).collect();
+                    let expr = stmt.expr1;
+                    let inner = context.with_variables(args.clone(), |ctx| expr.convert(ctx))?;
+                    NamedExpression {
+                        name: None,
+                        expr: Lambda {
+                            args,
+                            inner: Box::new(inner),
+                        }
+                        .into(),
+                        span: Span::call_site(),
+                    }
+                };
+                context.push_variable(name.clone());
+                let body = stmt.stmt1.convert(context)?;
+                Ok(NamedExpression {
+                    name: None,
+                    expr: Let {
+                        name: name.clone(),
+                        bound: Box::new(NamedExpression {
+                            name: Some(name),
+                            ..bound
+                        }),
+                        body: Box::new(body),
+                    }
+                    .into(),
+                    span: Span::call_site(),
+                })
+            }
+        }
     }
 }
 
 impl Convert for Expr1 {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
-        let mut iter = self.0.into_iter();
-        let first = iter.next().unwrap().convert(context)?;
-        let rest = iter
-            .map(|term| Ok((None, term.convert(context)?)))
-            .collect::<Result<Vec<_>, _>>()?;
+        match self {
+            Expr1::Alt1(alt) => alt.convert(context),
+            Expr1::Lambda1(lambda) => lambda.convert(context),
+        }
+    }
+}
 
-        let mut iter = rest.into_iter();
-        if let Some((punct, second)) = iter.next() {
+impl Convert for Lambda1 {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
+        let args: Vec<Name> = self.names1.into_iter().map(Name::new_variable).collect();
+        let alt = self.alt1;
+        let inner = context.with_variables(args.clone(), |ctx| alt.convert(ctx))?;
+        Ok(NamedExpression {
+            name: None,
+            expr: Lambda {
+                args,
+                inner: Box::new(inner),
+            }
+            .into(),
+            span: Span::call_site(),
+        })
+    }
+}
+
+impl Convert for Alt1 {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
+        let first = self.labelled1.convert(context)?;
+        let mut rest = self
+            .opt1
+            .into_iter()
+            .map(|inner| inner.convert(context).map(|e| (Span::call_site(), e)))
+            .peekable();
+        if rest.peek().is_some() {
             Ok(NamedExpression {
                 name: None,
                 expr: Alt {
                     first: Box::new(first),
-                    punct,
-                    second: Box::new(second),
-                    rest: iter.collect(),
+                    rest: rest.collect::<Result<_, _>>()?,
                 }
                 .into(),
-                span: None,
+                span: Span::call_site(),
             })
         } else {
             Ok(first)
@@ -149,11 +203,14 @@ impl Convert for Expr1 {
     }
 }
 
-impl Convert for First1 {
+impl Convert for Labelled1 {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
         let named = self.cat1.convert(context)?;
-        let name = Option::from(self.name1).or(named.name);
-
+        let label = match self.opt1 {
+            Opt15::None1(_) => None,
+            Opt15::Label1(l) => Some(Name::new_label(l.ident1)),
+        };
+        let name = Name::merge(label, named.name);
         Ok(NamedExpression {
             name,
             expr: named.expr,
@@ -164,24 +221,45 @@ impl Convert for First1 {
 
 impl Convert for Cat1 {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
-        let mut iter = self.into_iter();
-        let first = iter.next().unwrap().convert(context)?;
-        let rest = iter
-            .map(|term| Ok((None, term.convert(context)?)))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let mut iter = rest.into_iter();
-        if let Some((punct, second)) = iter.next() {
+        let first = self.call1.convert(context)?;
+        let mut rest = self
+            .opt1
+            .into_iter()
+            .map(|inner| inner.convert(context).map(|e| (Span::call_site(), e)))
+            .peekable();
+        if rest.peek().is_some() {
             Ok(NamedExpression {
                 name: None,
                 expr: Cat {
                     first: Box::new(first),
-                    punct,
-                    second: Box::new(second),
-                    rest: iter.collect(),
+                    rest: rest.collect::<Result<_, _>>()?,
                 }
                 .into(),
-                span: None,
+                span: Span::call_site(),
+            })
+        } else {
+            Ok(first)
+        }
+    }
+}
+
+impl Convert for Call1 {
+    fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
+        let first = self.term1.convert(context)?;
+        let mut rest = self
+            .opt1
+            .into_iter()
+            .map(|inner| inner.convert(context))
+            .peekable();
+        if rest.peek().is_some() {
+            Ok(NamedExpression {
+                name: None,
+                expr: Call {
+                    on: Box::new(first),
+                    args: rest.collect::<Result<_, _>>()?,
+                }
+                .into(),
+                span: Span::call_site(),
             })
         } else {
             Ok(first)
@@ -192,416 +270,215 @@ impl Convert for Cat1 {
 impl Convert for Term1 {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
         match self {
-            Self::Epsilon1(_) => Ok(NamedExpression {
+            Term1::Epsilon1(_) => Ok(NamedExpression {
                 name: None,
                 expr: ast::Epsilon.into(),
-                span: None,
+                span: Span::call_site(),
             }),
-            Self::Literal1(l) => Ok(NamedExpression {
+            Term1::Literal1(literal) => Ok(NamedExpression {
                 name: None,
-                expr: l.value().into(),
-                span: None,
+                expr: literal.contents1.into_iter().collect::<Literal>().into(),
+                span: Span::call_site(),
             }),
-            Self::Parens1(p) => p.parens1.expr1.convert(context),
-            Self::Fix1(f) => f.fix1.convert(context),
-            Self::CallOrVariable1(c) => c.convert(context),
+            Term1::Parens1(parens) => parens.expr1.convert(context),
+            Term1::Fix1(fix) => fix.convert(context),
+            Term1::Variable1(var) => var.convert(context),
         }
     }
 }
 
 impl Convert for Fix1 {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
-        let arg = self.arg1.into();
-        let expr = *self.inner1.expr1;
-        let inner = context.with_variable(&arg, |context| expr.convert(context))?;
-
+        let inner = self.term1.convert(context)?;
         Ok(NamedExpression {
             name: None,
             expr: Fix {
-                arg: Some(arg),
                 inner: Box::new(inner),
             }
             .into(),
-            span: None,
+            span: Span::call_site(),
         })
     }
 }
 
-impl Convert for CallOrVariable1 {
+impl Convert for Variable1 {
     fn convert(self, context: &mut Context) -> Result<NamedExpression, ConvertError> {
-        let name = self.ident1.into();
+        let name = Name::new_variable(self);
+        let index = context
+            .lookup(&name)
+            .ok_or_else(|| ConvertError::UndeclaredName(Box::new(name.clone())))?;
 
-        match self.opt2 {
-            Opt20::None1(_) => {
-                let binding = context
-                    .lookup(&name)
-                    .ok_or_else(|| ConvertError::UndeclaredName(Box::new(name.clone())))?;
+        Ok(NamedExpression {
+            name: Some(name),
+            expr: Variable { index }.into(),
+            span: Span::call_site(),
+        })
+    }
+}
 
-                Ok(match binding {
-                    Binding::Variable(index) => NamedExpression {
-                        name: Some(name),
-                        expr: Variable { index }.into(),
-                        span: None,
-                    },
-                    Binding::Parameter(index) => NamedExpression {
-                        name: Some(name),
-                        expr: Parameter { index }.into(),
-                        span: None,
-                    },
-                    Binding::Global => NamedExpression {
-                        name: None,
-                        expr: Call {
-                            name,
-                            args: Vec::new(),
-                        }
-                        .into(),
-                        span: None,
-                    },
-                })
-            }
-            Opt20::Some1(s) => {
-                let args = s
-                    .list1
-                    .into_iter()
-                    .map(|arg| arg.convert(context))
-                    .collect::<Result<_, _>>()?;
-                Ok(NamedExpression {
-                    name: None,
-                    expr: Call { name, args }.into(),
-                    span: None,
-                })
+impl IntoIterator for Names1 {
+    type Item = Ident1;
+
+    type IntoIter = Opt3;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Opt3::List1(Box::new(self))
+    }
+}
+
+impl Iterator for Opt3 {
+    type Item = Ident1;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let orig = mem::replace(self, Opt3::None1(Epsilon));
+        match orig {
+            Opt3::None1(_) => None,
+            Opt3::List1(names) => {
+                if let Opt4::Some1(some) = names.opt1 {
+                    *self = some.opt1;
+                }
+                Some(names.ident1)
             }
         }
     }
 }
 
-impl Literal3 {
-    pub fn value(self) -> String {
-        self.literal1
-            .contents1
-            .into_iter()
-            .map(LiteralChar1::value)
-            .collect()
-    }
-}
+impl Iterator for Opt16 {
+    type Item = Labelled1;
 
-impl LiteralChar1 {
-    pub fn value(self) -> char {
-        match self {
-            Self::Literal1(c) => c.into(),
-            Self::Escape1(e) => e.1.value(),
+    fn next(&mut self) -> Option<Self::Item> {
+        let orig = mem::replace(self, Opt16::None1(Epsilon));
+        match orig {
+            Opt16::None1(_) => None,
+            Opt16::Some1(some) => {
+                *self = some.separated1.opt1;
+                Some(some.separated1.labelled1)
+            }
         }
     }
 }
 
-impl Alt143 {
-    pub fn value(self) -> char {
-        match self {
-            Self::Ascii1(a) => a.value(),
-            Self::Oct1(o) => o.value(),
-            Self::Unicode1(u) => u.value(),
+impl Iterator for Opt14 {
+    type Item = Call1;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let orig = mem::replace(self, Opt14::None1(Epsilon));
+        match orig {
+            Opt14::None1(_) => None,
+            Opt14::Some1(some) => {
+                *self = some.separated1.opt1;
+                Some(some.separated1.call1)
+            }
+        }
+    }
+}
+
+impl Iterator for Opt13 {
+    type Item = Term1;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let orig = mem::replace(self, Opt13::None1(Epsilon));
+        match orig {
+            Opt13::None1(_) => None,
+            Opt13::Some1(some) => match some.opt1 {
+                Opt12::None1(_) => None,
+                Opt12::List1(call) => {
+                    *self = call.opt1;
+                    Some(call.term1)
+                }
+            },
+        }
+    }
+}
+
+impl IntoIterator for Contents1 {
+    type Item = char;
+
+    type IntoIter = Opt11;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Opt11::Plus1(Box::new(self))
+    }
+}
+
+impl Iterator for Opt11 {
+    type Item = char;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let orig = mem::replace(self, Opt11::None1(Epsilon));
+        match orig {
+            Opt11::None1(_) => None,
+            Opt11::Plus1(contents) => {
+                *self = contents.opt1;
+                Some(contents.literal_char1.into())
+            }
+        }
+    }
+}
+
+impl From<LiteralChar1> for char {
+    fn from(c: LiteralChar1) -> Self {
+        match c {
+            LiteralChar1::Literal1(c) => c.into(),
+            LiteralChar1::Escape1(e) => e.into(),
+        }
+    }
+}
+
+impl From<Escape1> for char {
+    fn from(e: Escape1) -> Self {
+        match e.1 {
+            Alt171::Ascii1(a) => a.escape(),
+            Alt171::Oct1(o) => o.into(),
+            Alt171::Unicode1(u) => u.into(),
         }
     }
 }
 
 impl Ascii1 {
-    pub fn value(self) -> char {
+    fn escape(self) -> char {
         match self {
-            Self::Branch1(_) => '\"',
-            Self::Branch2(_) => '\'',
-            Self::Branch3(_) => '\n',
-            Self::Branch4(_) => '\r',
-            Self::Branch5(_) => '\t',
-            Self::Branch6(_) => '\\',
-            Self::Branch7(_) => '\0',
+            Ascii1::Branch1(_) => '\"',
+            Ascii1::Branch2(_) => '\'',
+            Ascii1::Branch3(_) => '\n',
+            Ascii1::Branch4(_) => '\r',
+            Ascii1::Branch5(_) => '\t',
+            Ascii1::Branch6(_) => '\\',
+            Ascii1::Branch7(_) => '\0',
         }
     }
 }
 
-impl Oct1 {
-    pub fn value(self) -> char {
-        let s: String = [char::from(self.oct_digit1), char::from(self.hex_digit1)]
+impl From<Oct1> for char {
+    fn from(o: Oct1) -> Self {
+        let s: String = [char::from(o.oct_digit1), char::from(o.hex_digit1)]
             .iter()
             .collect();
         u32::from_str_radix(&s, 16).unwrap().try_into().unwrap()
     }
 }
 
-impl Unicode1 {
-    pub fn value(self) -> char {
-        let s: String = [self.hex_digit1.to_string(), self.opt1.to_string()]
-            .iter()
-            .map::<&str, _>(|s| s)
-            .collect();
+impl From<Unicode1> for char {
+    fn from(u: Unicode1) -> Self {
+        let s = u.up_to1.to_string();
         u32::from_str_radix(&s, 16).unwrap().try_into().unwrap()
     }
 }
 
-impl IntoIterator for Cat1 {
-    type Item = Term1;
-
-    type IntoIter = Cat1Iter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        Cat1Iter(Some(self))
-    }
-}
-
-pub struct Cat1Iter(Option<Cat1>);
-
-impl Iterator for Cat1Iter {
-    type Item = Term1;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let cat = self.0.take()?.0;
-        let term = cat.term1;
-        self.0 = cat.next1.into();
-        Some(term)
-    }
-}
-
-impl IntoIterator for Contents1 {
-    type Item = LiteralChar1;
-
-    type IntoIter = Contents1Iter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        Contents1Iter(Some(self))
-    }
-}
-
-pub struct Contents1Iter(Option<Contents1>);
-
-impl Iterator for Contents1Iter {
-    type Item = LiteralChar1;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let cat = self.0.take()?.0;
-        let lit = cat.literal_char1;
-        self.0 = cat.next1.into();
-        Some(lit)
-    }
-}
-
-impl IntoIterator for List1 {
-    type Item = Expr1;
-
-    type IntoIter = Fix192Iter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        Fix192Iter(Some(self.part3))
-    }
-}
-
-pub struct Fix192Iter(Option<Fix192>);
-
-impl Iterator for Fix192Iter {
-    type Item = Expr1;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let cat = self.0.take()?.0;
-        let expr = *cat.expr1;
-        self.0 = cat.next1.into();
-        Some(expr)
-    }
-}
-
-impl IntoIterator for Star2 {
-    type Item = Let1;
-
-    type IntoIter = Star2Iter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        Star2Iter(Some(self))
-    }
-}
-
-pub struct Star2Iter(Option<Star2>);
-
-impl Star2Iter {
-    pub fn consume(self) -> Goal1 {
-        let mut star = self.0.unwrap();
-
-        loop {
-            match star.0 {
-                Alt274::Step1(step) => star = *step.rec1,
-                Alt274::Goal1(goal) => return goal,
-            }
-        }
-    }
-}
-
-impl Iterator for Star2Iter {
-    type Item = Let1;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let star = self.0.take().unwrap();
-
-        // You can probably be safer about this and use `mem::swap` or similar.
-        // I cannot think of a way how, so this will do.
-        if let Alt274::Step1(step) = star.0 {
-            let stmt = step.let1;
-            self.0 = Some(*step.rec1);
-            Some(stmt)
-        } else {
-            self.0 = Some(star);
-            None
-        }
-    }
-}
-
-impl IntoIterator for Alt1 {
-    type Item = First1;
-
-    type IntoIter = Alt1Iter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        Alt1Iter(Some(self))
-    }
-}
-
-#[derive(Clone)]
-pub struct Alt1Iter(Option<Alt1>);
-
-impl Iterator for Alt1Iter {
-    type Item = First1;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let cat = self.0.take()?.0;
-        let first = cat.first1;
-        self.0 = cat.next1.into();
-        Some(first)
-    }
-}
-
-impl IntoIterator for List2 {
-    type Item = Ident2;
-
-    type IntoIter = Fix246Iter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        Fix246Iter(Some(self.part3))
-    }
-}
-
-#[derive(Clone)]
-pub struct Fix246Iter(Option<Fix246>);
-
-impl Iterator for Fix246Iter {
-    type Item = Ident2;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let cat = self.0.take()?.0;
-        let expr = cat.first1.ident1;
-        self.0 = cat.next1.into();
-        Some(expr)
-    }
-}
-
-impl From<Next6> for Option<Alt1> {
-    fn from(o: Next6) -> Self {
-        match o {
-            Next6::None1(_) => None,
-            Next6::Some1(s) => Some(*s.rec1),
-        }
-    }
-}
-
-impl From<Args1> for Option<List2> {
-    fn from(o: Args1) -> Self {
-        match o {
-            Args1::None1(_) => None,
-            Args1::Some1(s) => Some(s.list1),
-        }
-    }
-}
-
-impl From<Next2> for Option<Contents1> {
-    fn from(o: Next2) -> Self {
-        match o {
-            Next2::None1(_) => None,
-            Next2::Plus1(s) => Some(*s),
-        }
-    }
-}
-
-impl From<Next4> for Option<Fix192> {
-    fn from(o: Next4) -> Self {
-        match o {
-            Next4::None1(_) => None,
-            Next4::Some1(s) => match s.opt2 {
-                Opt18::None1(_) => None,
-                Opt18::Rec1(e) => Some(*e),
-            },
-        }
-    }
-}
-
-impl From<Next5> for Option<Cat1> {
-    fn from(o: Next5) -> Self {
-        match o {
-            Next5::None1(_) => None,
-            Next5::Some1(s) => Some(*s.rec1)
-        }
-    }
-}
-
-impl From<Next7> for Option<Fix246> {
-    fn from(o: Next7) -> Self {
-        match o {
-            Next7::None1(_) => None,
-            Next7::Some1(s) => match s.opt2 {
-                Opt30::None1(_) => None,
-                Opt30::Rec1(e) => Some(*e),
-            },
-        }
-    }
-}
-
-impl From<Name1> for Option<Name> {
-    fn from(o: Name1) -> Self {
-        match o {
-            Name1::None1(_) => None,
-            Name1::Label1(l) => Some(l.label1.to_string().into()),
-        }
-    }
-}
-
-impl From<Name2> for Name {
-    fn from(i: Name2) -> Self {
+impl From<Variable1> for Content {
+    fn from(i: Variable1) -> Self {
         i.to_string().into()
     }
 }
 
-impl From<Arg1> for Name {
-    fn from(i: Arg1) -> Self {
-        i.to_string().into()
-    }
-}
-
-impl From<Ident1> for Name {
-    fn from(i: Ident1) -> Self {
-        i.to_string().into()
-    }
-}
-
-impl From<Ident2> for Name {
+impl From<Ident2> for Content {
     fn from(i: Ident2) -> Self {
         i.to_string().into()
     }
 }
 
-
-impl From<Alt277> for Star2 {
-    fn from(mut a: Alt277) -> Self {
-        while let Alt277::Step1(step) = a {
-            a = (*step.rec1).0;
-        }
-
-        if let Alt277::Star1(s) = a {
-            s
-        } else {
-            unreachable!()
-        }
+impl From<Ident1> for Content {
+    fn from(i: Ident1) -> Self {
+        i.to_string().into()
     }
 }

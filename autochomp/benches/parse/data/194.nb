@@ -1,0 +1,7 @@
+let bot = !(/rec/ "a" . rec);
+let zero = /zero suc/ zero;
+let suc n = /zero suc/ suc (n zero suc);
+
+let opt  some = _ : None | some;
+let plus iter = !(/plus/ iter . (opt plus));
+match opt "ab";

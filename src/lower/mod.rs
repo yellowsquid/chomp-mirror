@@ -8,10 +8,15 @@ use proc_macro2::{Ident, Span, TokenStream, TokenTree};
 use quote::{format_ident, quote, quote_spanned};
 use syn::{Index, LitStr};
 
-use crate::chomp::{Name, ast, set::FirstSet, typed::{
+use crate::chomp::{
+    ast,
+    name::Name,
+    set::FirstSet,
+    typed::{
         lower::{Backend, GenerateCode},
         Alt, Cat, Epsilon, Fix, Literal, Type, Typed, TypedExpression, Variable,
-    }};
+    },
+};
 
 #[derive(Clone, Debug)]
 struct Ty {
@@ -44,7 +49,7 @@ impl RustBackend {
         match name {
             None => (id, format_ident!("{}{}", prefix, id + 1, span = span)),
             Some(name) => {
-                let name = name.to_camel_case().into_ident(span);
+                let name: Ident = name.to_camel_case().into();
                 let count = self.name_map.entry(name.clone()).or_insert(0);
                 *count += 1;
                 (id, format_ident!("{}{}", name, count))
@@ -60,10 +65,7 @@ impl RustBackend {
             .into_iter()
             .map(|e| {
                 (
-                    (
-                        e.get_type().clone(),
-                        (e.name.clone(), e.span.unwrap_or_else(Span::call_site)),
-                    ),
+                    (e.get_type().clone(), (e.name.clone(), e.span)),
                     e.gen(self),
                 )
             })
@@ -104,7 +106,7 @@ impl RustBackend {
             .map(move |(index, (name, span))| match name {
                 None => format_ident!("{}{}", default, index + 1, span = span),
                 Some(name) => {
-                    let name = name.to_snake_case().into_ident(span);
+                    let name: Ident = name.to_snake_case().into();
                     let count = name_map.entry(name.clone()).or_insert(0_usize);
                     *count += 1;
                     format_ident!("{}{}", name, count)
@@ -122,7 +124,7 @@ impl RustBackend {
             .map(move |(index, (name, span))| match name {
                 None => format_ident!("{}{}", default, index + 1, span = span),
                 Some(name) => {
-                    let name = name.to_camel_case().into_ident(span);
+                    let name: Ident = name.to_camel_case().into();
                     let count = name_map.entry(name.clone()).or_insert(0_usize);
                     *count += 1;
                     format_ident!("{}{}", name, count)
@@ -153,7 +155,7 @@ impl Backend for RustBackend {
 
     type Code = TokenStream;
 
-    fn gen_epsilon(&mut self, _name: Option<Name>, _span: Option<Span>, _eps: Epsilon) -> Self::Id {
+    fn gen_epsilon(&mut self, _name: Option<Name>, _span: Span, _eps: Epsilon) -> Self::Id {
         if let Some(id) = self.eps_id {
             return id;
         }
@@ -167,9 +169,7 @@ impl Backend for RustBackend {
         id
     }
 
-    fn gen_literal(&mut self, name: Option<Name>, span: Option<Span>, lit: Literal) -> Self::Id {
-        let span = span.unwrap_or_else(Span::call_site);
-
+    fn gen_literal(&mut self, name: Option<Name>, span: Span, lit: Literal) -> Self::Id {
         let lit: ast::Literal = lit.into();
         if let Some(&id) = self.lit_map.get(&lit) {
             return id;
@@ -218,8 +218,7 @@ impl Backend for RustBackend {
         id
     }
 
-    fn gen_cat(&mut self, name: Option<Name>, span: Option<Span>, cat: Cat) -> Self::Id {
-        let span = span.unwrap_or_else(Span::call_site);
+    fn gen_cat(&mut self, name: Option<Name>, span: Span, cat: Cat) -> Self::Id {
         let (_, name_spans, ids) = self.recurse_exprs(cat);
 
         if let Some(&id) = self.cat_map.get(&ids) {
@@ -283,8 +282,7 @@ impl Backend for RustBackend {
         id
     }
 
-    fn gen_alt(&mut self, name: Option<Name>, span: Option<Span>, alt: Alt) -> Self::Id {
-        let span = span.unwrap_or_else(Span::call_site);
+    fn gen_alt(&mut self, name: Option<Name>, span: Span, alt: Alt) -> Self::Id {
         let (tys, name_spans, ids) = self.recurse_exprs(alt);
 
         if let Some(&id) = self.alt_map.get(&ids) {
@@ -338,7 +336,7 @@ impl Backend for RustBackend {
                         fn take<P: Parser + ?Sized>(input: &mut P) -> Result<Self, TakeError> {
                             match input.peek() {
                                 #(#firsts => Ok(Self::#first_alts(input.take()?)),)*
-                                _ => Ok(Self::#nullable(input.take()?))
+                                _ => Ok(Self::#nullable(input.take()?)),
                             }
                         }
                     }
@@ -379,8 +377,7 @@ impl Backend for RustBackend {
         id
     }
 
-    fn gen_fix(&mut self, name: Option<Name>, span: Option<Span>, fix: Fix) -> Self::Id {
-        let span = span.unwrap_or_else(Span::call_site);
+    fn gen_fix(&mut self, name: Option<Name>, span: Span, fix: Fix) -> Self::Id {
         let inner = fix.unwrap();
 
         if let Some(&id) = self.fix_map.get(&inner) {
@@ -401,29 +398,13 @@ impl Backend for RustBackend {
         self.context.pop();
 
         let inner_ty = self.data[inner].name.clone();
-        let rest = quote_spanned! {span=>
-            #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-            pub struct #name(pub #inner_ty);
-
-            impl ::std::fmt::Display for #name {
-                fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                    self.0.fmt(f)
-                }
-            }
-
-            impl Parse for #name {
-                fn take<P: Parser + ?Sized>(input: &mut P) -> Result<Self, TakeError> {
-                    input.take().map(Self)
-                }
-            }
-        };
+        let rest = quote_spanned! {span=> pub type #name = #inner_ty;};
         self.data[id].rest = rest;
         self.data[id].deps = [inner].iter().cloned().collect();
         id
     }
 
-    fn gen_variable(&mut self, _name: Option<Name>, span: Option<Span>, var: Variable) -> Self::Id {
-        let span = span.unwrap_or_else(Span::call_site);
+    fn gen_variable(&mut self, _name: Option<Name>, span: Span, var: Variable) -> Self::Id {
         let fix_id = self.context[self.context.len() - var.index() - 1];
 
         if let Some(&id) = self.var_map.get(&fix_id) {
@@ -443,9 +424,7 @@ impl Backend for RustBackend {
         id
     }
 
-    fn emit_code(self, name: Option<Name>, span: Option<Span>, id: Self::Id) -> Self::Code {
-        let span = span.unwrap_or_else(Span::call_site);
-
+    fn emit_code(self, name: Option<Name>, span: Span, id: Self::Id) -> Self::Code {
         let mut tokens = quote_spanned! {span=>
             use ::chewed::*;
         };
@@ -467,7 +446,7 @@ impl Backend for RustBackend {
         let root_name = self.data[id].name.clone();
 
         tokens.extend(if let Some(name) = name {
-            let name = name.into_ident(span);
+            let name = name.into();
             let count = self.name_map.get(&name).copied().unwrap_or_default() + 1;
             let name = format_ident!("{}{}", name, count);
             quote_spanned! {span=>

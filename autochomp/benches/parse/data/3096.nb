@@ -1,0 +1,82 @@
+let bot = !(/rec/ "a" . rec);
+let zero = /zero suc/ zero;
+let suc n = /zero suc/ suc (n zero suc);
+
+let opt  some = _ : None | some;
+let plus iter = !(/plus/ iter . (opt plus));
+let star iter = opt (plus iter);
+
+let up_to x n = n bot (/rec/ x . opt rec);
+
+let Pattern_Whitespace = "\t"|"\n"|"\x0B"|"\x0c"|"\r"|" "|"\u{85}"|"\u{200e}"|"\u{200f}"|"\u{2028}"|"\u{2029}";
+
+let oct_digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" ;
+let digit     = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+let hex_digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" |
+                "a" | "b" | "c" | "d" | "e" | "f" |
+                "A" | "B" | "C" | "D" | "E" | "F" ;
+
+let XID_Start =
+    "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" |
+    "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" |
+    "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" |
+    "y" | "z" |
+    "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" |
+    "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" |
+    "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" |
+    "Y" | "Z" ;
+let XID_Continue =
+    XID_Start | "_" | "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+
+let literal_char =
+    (" " | "!"       | "#" | "$" | "%" | "&" | "'" |
+     "(" | ")" | "*" | "+" | "," | "-" | "." | "/" |
+     "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" |
+     "8" | "9" | ":" | ";" | "<" | "=" | ">" | "?" |
+     "@" | "A" | "B" | "C" | "D" | "E" | "F" | "G" |
+     "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" |
+     "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" |
+     "X" | "Y" | "Z" | "["       | "]" | "^" | "_" |
+     "`" | "a" | "b" | "c" | "d" | "e" | "f" | "g" |
+     "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" |
+     "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" |
+     "x" | "y" | "z" | "{" | "|" | "}" | "~") : Literal |
+    "\\" . (
+        ("\"" | "'" | "n" | "r" | "t" | "\\" | "0") : Ascii |
+        "x"  . oct_digit . hex_digit : Oct |
+        "u{" . up_to hex_digit (suc (suc (suc (suc (suc (suc zero)))))) . "}" : Unicode
+    ) : Escape ;
+
+let ws = plus Pattern_Whitespace;
+let ows = opt ws;
+
+let list inner = !(/list/ inner . opt (ws . opt list));
+let separated inner sep = !(/separated/ inner . opt (sep . ows . separated));
+
+let epsilon = "_";
+let ident = XID_Start . star XID_Continue;
+let literal = "\"" . (plus literal_char : Contents) . "\"";
+let fix term = "!" . ows . term;
+let parens expr = "(" . ows . expr . ")";
+
+let names = list ident;
+
+let term expr = !(/term/
+      epsilon : Epsilon
+    | literal : Literal
+    | parens expr : Parens
+    | fix term : Fix
+    | ident : Variable
+    );
+
+let label = ":" . ows . ident . ows;
+
+let call   expr = list (term expr);
+let cat    expr = separated (call expr) ".";
+let alt    expr = separated (cat expr . opt label : Labelled) "|";
+let lambda expr = "/" . ows . names . "/" . ows . alt expr;
+let expr = !(/expr/ alt expr | lambda expr);
+let goal = "match" . ws . expr . ";" . ows;
+let let stmt = "let" . ws . names . "=" . ows . expr . ";" . ows . stmt;
+let stmt = !(/stmt/ let stmt | goal);
+match !(/skip/ Pattern_Whitespace . skip | stmt);

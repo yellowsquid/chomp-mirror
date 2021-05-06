@@ -1,0 +1,20 @@
+{
+    "cod": "200",
+    "message": 0,
+    "cnt": 40,
+    "list": [
+        {
+            "dt": 1612882800,
+            "main": {
+                "temp": 273.520,
+                "feels_like": 266.680,
+                "temp_min": 273.170,
+                "temp_max": 273.520,
+                "pressure": 1009,
+                "sea_level": 1009,
+                "grnd_level": 997,
+                "humidity": 81
+            }
+        }
+    ]
+}

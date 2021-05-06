@@ -5,7 +5,7 @@ use proc_macro2::Span;
 use super::{
     ast,
     set::{FirstSet, FlastSet},
-    Name,
+    name::Name,
 };
 
 pub mod context;
@@ -14,7 +14,6 @@ pub mod lower;
 
 mod infer;
 
-use self::error::{AltError, CatError};
 pub use self::infer::TypeInfer;
 
 #[derive(Debug, Default, Clone, Eq, Hash, PartialEq)]
@@ -53,28 +52,25 @@ impl Type {
         &self.flast_set
     }
 
-    pub fn cat(self, other: Self) -> Self {
-        Self {
-            nullable: self.nullable && other.nullable,
-            first_set: self.first_set.union(if self.nullable {
-                other.first_set.clone()
-            } else {
-                FirstSet::default()
-            }),
-            flast_set: other.flast_set.union(if other.nullable {
-                self.flast_set.union_first(other.first_set)
-            } else {
-                FlastSet::default()
-            }),
+    pub fn cat(&mut self, other: Self) {
+        if self.nullable {
+            self.first_set.union(other.first_set.clone())
         }
+
+        if other.nullable {
+            self.flast_set.union_first(other.first_set);
+            self.flast_set.union(other.flast_set);
+        } else {
+            self.flast_set = other.flast_set;
+        }
+
+        self.nullable &= other.nullable;
     }
 
-    pub fn alt(self, other: Self) -> Self {
-        Self {
-            nullable: self.nullable || other.nullable,
-            first_set: self.first_set.union(other.first_set),
-            flast_set: self.flast_set.union(other.flast_set),
-        }
+    pub fn alt(&mut self, other: Self) {
+        self.nullable |= other.nullable;
+        self.first_set.union(other.first_set);
+        self.flast_set.union(other.flast_set);
     }
 }
 
@@ -122,43 +118,6 @@ pub struct Cat {
     ty: Type,
 }
 
-impl Cat {
-    fn new<I: IntoIterator<Item = (Option<Span>, TypedExpression)>>(
-        first: TypedExpression,
-        rest: I,
-    ) -> Result<Self, CatError> {
-        if first.get_type().nullable() {
-            return Err(CatError::FirstNullable {
-                expr: first,
-                punct: todo!(),
-            });
-        }
-
-        rest.into_iter()
-            .try_fold(
-                (first.get_type().clone(), vec![first]),
-                |(ty, mut terms), (punct, right)| {
-                    if ty
-                        .flast_set()
-                        .intersect_first(right.get_type().first_set())
-                        .is_empty()
-                    {
-                        let ty = ty.cat(right.get_type().clone());
-                        terms.push(right);
-                        Ok((ty, terms))
-                    } else {
-                        Err(CatError::FirstFlastOverlap {
-                            first: terms,
-                            punct,
-                            next: right,
-                        })
-                    }
-                },
-            )
-            .map(|(ty, terms)| Self { ty, terms })
-    }
-}
-
 impl IntoIterator for Cat {
     type Item = TypedExpression;
 
@@ -173,42 +132,6 @@ impl IntoIterator for Cat {
 pub struct Alt {
     terms: Vec<TypedExpression>,
     ty: Type,
-}
-
-impl Alt {
-    pub fn new<I: IntoIterator<Item = (Option<Span>, TypedExpression)>>(
-        first: TypedExpression,
-        rest: I,
-    ) -> Result<Self, AltError> {
-        rest.into_iter()
-            .try_fold(
-                (first.get_type().clone(), vec![first]),
-                |(ty, mut terms), (punct, right)| {
-                    if ty.nullable() && right.get_type().nullable() {
-                        Err(AltError::BothNullable {
-                            left: terms,
-                            punct,
-                            right,
-                        })
-                    } else if ty
-                        .first_set()
-                        .intersect(right.get_type().first_set())
-                        .is_empty()
-                    {
-                        let ty = ty.alt(right.get_type().clone());
-                        terms.push(right);
-                        Ok((ty, terms))
-                    } else {
-                        Err(AltError::FirstOverlap {
-                            left: terms,
-                            punct,
-                            right,
-                        })
-                    }
-                },
-            )
-            .map(|(ty, terms)| Self { ty, terms })
-    }
 }
 
 impl IntoIterator for Alt {
@@ -245,14 +168,6 @@ impl Variable {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct Call {
-    ty: Type,
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct Lambda {}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum RawTypedExpression {
     Epsilon(Epsilon),
     Literal(Literal),
@@ -260,8 +175,6 @@ enum RawTypedExpression {
     Alt(Alt),
     Fix(Fix),
     Variable(Variable),
-    Call(Call),
-    Lambda(Lambda),
 }
 
 impl From<Epsilon> for RawTypedExpression {
@@ -304,7 +217,7 @@ impl From<Variable> for RawTypedExpression {
 pub struct TypedExpression {
     inner: RawTypedExpression,
     pub name: Option<Name>,
-    pub span: Option<Span>,
+    pub span: Span,
 }
 
 impl PartialEq for TypedExpression {
@@ -358,5 +271,22 @@ impl Typed for TypedExpression {
             RawTypedExpression::Fix(f) => f.get_type(),
             RawTypedExpression::Variable(v) => v.get_type(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cat_right() {
+        let epsilon = Type { nullable: true, ..Type::default()};
+        let mut x = Type::of_str("a");
+        x.cat(Type::of_str("b"));
+        assert_eq!(x, Type::of_str("a"));
+        x.cat(Type::default());
+        assert_eq!(x, Type::of_str("a"));
+        x.cat(epsilon);
+        assert_eq!(x, Type::of_str("a"));
     }
 }
