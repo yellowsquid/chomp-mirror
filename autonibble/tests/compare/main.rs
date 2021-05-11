@@ -16,7 +16,7 @@ fn chomp(input: &str) -> NamedExpression {
 
 fn autonibble(input: &str) -> NamedExpression {
     IterWrapper::new(input.chars())
-        .parse::<autochomp::Ast>()
+        .parse::<autonibble::Ast>()
         .unwrap()
         .convert(&mut Context::default())
         .unwrap()

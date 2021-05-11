@@ -27,7 +27,7 @@ fn main() {
         .map_err(|e| Box::new(e) as Box<dyn Error>)
         .and_then(|_| {
             IterWrapper::new(input.chars())
-                .parse::<autochomp::Ast>()
+                .parse::<autonibble::Ast>()
                 .map_err(|e| Box::new(e) as Box<dyn Error>)
         })
         .and_then(|ast| {

@@ -26,9 +26,9 @@ const INPUTS: &[&str] = &[
 
 ];
 
-fn parse_autochomp(input: &str) -> Result<NamedExpression, Box<dyn Error>> {
+fn parse_autonibble(input: &str) -> Result<NamedExpression, Box<dyn Error>> {
     IterWrapper::new(input.chars())
-        .parse::<autochomp::Ast>()
+        .parse::<autonibble::Ast>()
         .map_err(|e| Box::new(e) as Box<dyn Error>)
         .and_then(|ast| {
             ast.convert(&mut Context::default())
@@ -55,7 +55,7 @@ fn bench_parse(c: &mut Criterion) {
             b.iter(|| parse_chomp(i))
         });
         group.bench_with_input(BenchmarkId::new("AutoChomp", i), *input, |b, i| {
-            b.iter(|| parse_autochomp(i))
+            b.iter(|| parse_autonibble(i))
         });
     }
 }
